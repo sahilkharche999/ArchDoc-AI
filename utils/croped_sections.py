@@ -298,71 +298,14 @@ def filter_candidate_coordinates(image_path, all_candidates_flat_list):
             if uid in id_map:
                 final_list.append(id_map[uid])
                 
-        # if os.path.exists(temp_annotated_path):
-        #     os.remove(temp_annotated_path)
+        if os.path.exists(temp_annotated_path):
+            os.remove(temp_annotated_path)
 
     except Exception as e:
         print(f"  ! Filtering failed: {e}. Keeping all ambiguous items.")
         final_list.extend(ambiguous_items)
         
     return final_list
-
-
-
-def disambiguate_repeated_titles(image_path, title_coords_candidates):
-    final_coords = {}
-
-    for title, candidates in title_coords_candidates.items():
-        if len(candidates) == 1:
-            final_coords[title] = candidates[0]
-            continue
-
-        candidate_str = "\n".join(
-            [f"{i+1}: x1={c['x1']}, y1={c['y1']}, x2={c['x2']}, y2={c['y2']}"
-             for i, c in enumerate(candidates)]
-        )
-
-        prompt = f"""
-You are looking at an architectural drawing sheet (image provided).
-
-The title "{title}" appears multiple times.
-Select the correct candidate.
-
-Candidates:
-{candidate_str}
-
-Rules:
-- Return ONLY a JSON object
-- The number MUST be between 1 and {len(candidates)}
-
-Example:
-{{ "choice": 2 }}
-"""
-
-        message = HumanMessage(
-            content=[
-                {"type": "text", "text": prompt},
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/png;base64,{load_image_base64(image_path)}"
-                    },
-                },
-            ]
-        )
-
-        # Schema-enforced invoke
-        response = llm.with_structured_output(TitleChoice).invoke([message])
-
-        choice = response.choice - 1  # convert to 0-based
-
-        # Absolute safety (should never trigger now)
-        if not (0 <= choice < len(candidates)):
-            choice = min(range(len(candidates)), key=lambda i: candidates[i]["y1"])
-
-        final_coords[title] = candidates[choice]
-
-    return final_coords
 
 
 def extract_words_with_coords(pdf_path, page_num):
@@ -426,8 +369,8 @@ def find_title_coordinates_from_image_and_pdf(pdf_path):
 
             print(f"The co-ordiantes we are getting is as : {title_coords_candidates}")
 
-            # 5. Resolve duplicates using Gemini if needed
-            # final_coords = disambiguate_repeated_titles(image_path, title_coords_candidates)
+            
+
 
             results[f"page_{page_num}"] = title_coords_candidates
 
