@@ -27,6 +27,7 @@ class ExtractedContent(BaseModel):
     category: Literal["Table", "Notes", "Detail", "Legend"] = Field(description="The type of content found")
     content: Dict[str, Any] = Field(description="The extracted data as a Key-Value dictionary. For tables, keys are row headers. For notes, keys are numbers.")
 
+
 # ---SEMENTIC SEGMENTATION SCHEMAS END ---
 
 
@@ -37,17 +38,25 @@ class ExtractedContent(BaseModel):
 class DrawingTypeResponse(BaseModel):
     drawing_type: Literal["text", "floor", "section"]
 
-
 # Schema for Agent 3 (Detail Extraction)
 class MaterialItem(BaseModel):
-    item_name: str = Field(description="Name of the material e.g. MC6x15.1")
-    qty_rule: str = Field(description="How to calculate qty e.g. 'Count' or 'Length of Rail'")
-    notes: Optional[str] = Field(description="Context notes")
+    item_name: str = Field(description="Exact text from drawing e.g. MC6x15.1")
+    material_type: str = Field(description="Category: W, HSS, C, L, FB, ROD")
+    qty_rule: str = Field(description="Logic: 'FIXED: [Count]' or 'VARIABLE: [Dependency]'")
+    notes: Optional[str] = Field(description="Context notes e.g. 'Side Rails'")
 
+class FabricationMetrics(BaseModel):
+    bolt_count: int = Field(default=0, description="Total bolts in this detail")
+    hole_count: int = Field(default=0, description="Total holes (usually bolts * 1 or 2)")
+    weld_inches: float = Field(default=0.0, description="Total linear inches of weld")
+
+# The Recipe Card (The Main Object)
 class DetailExtraction(BaseModel):
     detail_number: Optional[str] = Field(description="The number inside the bubble e.g. '7'")
-    title: str = Field(description="Title of the detail")
-    materials: List[MaterialItem] = Field(description="List of BOM items found")
+    title: str = Field(description="Title of the detail e.g. 'LADDER DETAIL'")
+    visual_reasoning: str = Field(description="CoT rationale: What is this drawing and how does it work?")
+    materials: List[MaterialItem] = Field(description="List of ingredients")
+    fabrication: FabricationMetrics = Field(description="Fabrication counts per detail instance")
 
 # Schema for Agent 2 (Plan Extraction)
 class PlanMember(BaseModel):
@@ -62,23 +71,55 @@ class PlanSymbol(BaseModel):
     associated_text: Optional[str] = Field(description="Dimension text found nearby e.g. 13'-10\"")
 
 class PlanSchedule(BaseModel):
-    name: str
-    data: str
+    name: str = Field(description="Title of the schedule e.g. 'Shear Wall Schedule'")
+    data: str = Field(description="The content of the schedule as a string or JSON-like string")
 
 class PlanExtraction(BaseModel):
-    sheet_type: str = Field(description="Floor Plan or Roof Plan")
-    members: List[PlanMember]
-    symbols: List[PlanSymbol]
-    global_notes: List[str]
-    schedules: List[PlanSchedule]
+    # NEW FIELD: Tells us if this crop is a Drawing or a Definition Table
+    content_type: Literal["Plan_View", "Definition_Schedule", "Notes"] = Field(
+        description="Classify the image crop: 'Plan_View' for drawings, 'Definition_Schedule' for tables/legends."
+    )
+    visual_reasoning: str = Field(description="CoT rationale: What did you see and how did you classify it?")
+    
+    # Fields for Plan View (Instances)
+    members: List[PlanMember] = Field(default=[])
+    symbols: List[PlanSymbol] = Field(default=[])
+    
+    # Fields for Schedules/Notes (Definitions)
+    schedules: List[PlanSchedule] = Field(default=[])
+    global_notes: List[str] = Field(default=[])
+
+
 
 # Schema for Agent 4 (Final Merger)
 class BillOfMaterialItem(BaseModel):
-    description: str
-    total_qty: float
-    total_linear_feet: Optional[float]
-    logic_trace: str
+    category: Literal["W", "HSS", "C", "L", "FB", "ROD"] = Field(description="Material Category")
+    description: str = Field(description="Full description e.g. 'HSS 5x5x5/16 Column'")
+    
+    # The Core Metrics
+    total_qty: int = Field(description="Total count of pieces")
+    total_linear_feet: float = Field(description="Total length in feet (for pricing)")
+    total_weight_lbs: float = Field(description="Total weight (Length * Lbs/ft)")
+    
+    # Fabrication Metrics
+    total_bolts: int = Field(default=0)
+    total_holes: int = Field(default=0)
+    total_weld_inches: float = Field(default=0.0)
+    
+    # The "Why" (CoT)
+    logic_trace: str = Field(description="Explanation of the calculation. E.g. 'Found 5 cols. Height 18ft from Roof Note. 5*18=90ft.'")
 
 class FinalEstimation(BaseModel):
+    project_summary: str = Field(description="High-level summary of what was estimated")
     final_bill_of_materials: List[BillOfMaterialItem]
 
+
+class ScheduleRule(BaseModel):
+    schedule_name: str = Field(description="Name of the schedule e.g. 'Shear Wall Schedule'")
+    symbol: str = Field(description="The symbol being defined e.g. '<1>' or 'F5'")
+    specs: str = Field(description="The definition e.g. '5/8 bolt @ 16oc'")
+
+class TextRulesExtraction(BaseModel):
+    rules: List[ScheduleRule]
+    general_notes: List[str]
+    

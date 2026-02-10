@@ -1,12 +1,14 @@
 import os 
 import base64
 import json
-
+from PIL import Image, ImageDraw, ImageFont
 #importing the state
 from langgraph_temp_workflow.common.state import Sementic_Segmentation_State
 
 #util functions
-from langgraph_temp_workflow.common.utils import image_to_data_url,crop_image_dynamic,pil_to_data_url,normalize_bbox
+from langgraph_temp_workflow.common.utils import filter_candidate_coordinates,image_to_data_url,crop_image_dynamic,pil_to_data_url,normalize_bbox,scale_coords_pdf_to_image,load_image_base64
+
+from utils.croped_sections import find_title_coordinates_from_image_and_pdf 
 
 #importing Schemas
 from langgraph_temp_workflow.common.schemas import DetectionOutput,EvaluationOutput,ExtractedContent
@@ -31,9 +33,62 @@ def detect_regions_node(state: Sementic_Segmentation_State):
     """Phase 1: Semantic Discovery."""
     print("\n--- PHASE 1: SEMANTIC DISCOVERY ---")
     img_path = state["image_path"]
+    pdf_path=state['pdf_path']
+
+    try:
+        all_coords = find_title_coordinates_from_image_and_pdf(pdf_path)
+        coords_dict = all_coords.get('page_1', {})
+        scale_coords_pdf_to_image
+    except Exception as e:
+        print(f"Coord extraction failed: {e}")
+        coords_dict = {}
+
+    scaled = scale_coords_pdf_to_image(
+        coords_dict,
+        pdf_path,
+        img_path
+    )
+    flat_list = []
+    for title, candidates in scaled.items():
+        for c in candidates:
+            flat_list.append({"title": title, "coords": c})
+
+    filtered_cord=filter_candidate_coordinates(img_path,flat_list)
+     
+    print(f"Here we got the co-ordiantes for floor plan as : {filtered_cord}")
+    img = Image.open(img_path)
+    w, h = img.size
+    
+    normalized_anchors = []
+    for item in filtered_cord:
+        title = item["title"]
+        c = item["coords"]
+        # Convert pixels to 0.0-1.0
+        norm_box = [
+            round(c["x1"] / w, 3),
+            round(c["y1"] / h, 3),
+            round(c["x2"] / w, 3),
+            round(c["y2"] / h, 3)
+        ]
+        normalized_anchors.append(f"- {title}: {norm_box}")
+    
+    anchors_str = "\n".join(normalized_anchors)
+
     image_data = image_to_data_url(img_path)
 
-    prompt =prompt_for_detect_regions_node()
+    base_prompt =prompt_for_detect_regions_node()
+
+    enhanced_prompt = f"""
+    {base_prompt}
+    
+    ### HINT: OCR TEXT DETECTED (Normalized 0.0-1.0)
+    I have already scanned the image. Here are the EXACT locations of the Titles:
+    {anchors_str}
+    
+    **INSTRUCTION:** 
+    1. Look at these coordinates.
+    2. Draw a box that includes this Title AND the content associated with it (Table/Drawing).
+    """
 
     detector = llm.with_structured_output(DetectionOutput)
     
@@ -41,7 +96,7 @@ def detect_regions_node(state: Sementic_Segmentation_State):
         response = detector.invoke([
             SystemMessage(content="You are a layout analysis expert."),
             HumanMessage(content=[
-                {"type": "text", "text": prompt},
+                {"type": "text", "text": enhanced_prompt},
                 {"type": "image_url", "image_url": image_data} 
             ])
         ])

@@ -368,10 +368,7 @@ def find_title_coordinates_from_image_and_pdf(pdf_path):
             title_coords_candidates = find_all_title_coordinates(words, titles)
 
             print(f"The co-ordiantes we are getting is as : {title_coords_candidates}")
-
             
-
-
             results[f"page_{page_num}"] = title_coords_candidates
 
     return results

@@ -13,3 +13,4 @@ langgraph
 langchain-google-genai   
 langchain-groq
 dspy-ai
+neo4j

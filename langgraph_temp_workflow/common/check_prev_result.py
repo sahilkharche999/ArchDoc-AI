@@ -13,7 +13,7 @@ app = workflow.compile(checkpointer=memory)
 # 3. Use the SAME Thread ID you used before
 config = {"configurable": {"thread_id": "job_123"}}
 
-# 4. Get the State directly (No API calls!) 
+# 4. Get the State directly (No API calls!)   
 snapshot = app.get_state(config)
 
 if not snapshot.values:

@@ -24,3 +24,5 @@ for event in app.stream(initial_state, config=config):
     for node_name, state_update in event.items():
         print(f"Finished Node: {node_name}")
         # You can print specific state keys here to debug langgraph_temp_workflow/main.py
+
+        #langgraph_temp_workflow.main

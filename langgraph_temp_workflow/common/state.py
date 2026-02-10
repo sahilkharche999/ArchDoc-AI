@@ -13,6 +13,7 @@ class ProjectState(TypedDict):
     
 class Sementic_Segmentation_State(TypedDict):
     image_path: str
+    pdf_path:str
     detected_queue: List[Region]
     current_region_label: Optional[str]
     current_bbox: Optional[List[float]]
