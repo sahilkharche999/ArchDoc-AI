@@ -11,7 +11,7 @@ config = {"configurable": {"thread_id": "job_123"}}
 
 # 2. Define the CORRECT Floor Plan Paths
 manual_floor_plan = [
-    "output_temp/floor_3/floor_3/vlm/images/c2071a8eb39ff6495f84a2cb170897bc62a795ef8b60ce9e337bd32f615e99dc.jpg",
+    # "output_temp/floor_3/floor_3/vlm/images/c2071a8eb39ff6495f84a2cb170897bc62a795ef8b60ce9e337bd32f615e99dc.jpg",
     "output_temp/floor_4/floor_4/vlm/images/cb7ea89114e1c238311cf9bf3f1babcc1ef68eec3373691da3efe37289b125fe.jpg"
 ]
 

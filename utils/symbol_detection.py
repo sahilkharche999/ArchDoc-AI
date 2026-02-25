@@ -58,7 +58,7 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
 
     # 2. Process Detections
     for i, (score, label, box) in enumerate(zip(results["scores"], results["labels"], results["boxes"])):
-        if score.item() < 0.20: continue
+        if score.item() < 0.30: continue
 
         # Get Coords
         x1, y1, x2, y2 = map(int, box.tolist())

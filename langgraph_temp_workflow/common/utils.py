@@ -1,20 +1,27 @@
-import base64
 import cv2
 import re 
+import pdfplumber
+import json
+import os
+import base64
 from typing import  List
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
 from dotenv import load_dotenv
-import pdfplumber
-import json
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 from io import BytesIO
 from google import genai
-from google.genai import types
-import json
-import os
-from langgraph_temp_workflow.common.schemas import DetailList,DetailExtraction
-
+import pandas as pd
+from langgraph_temp_workflow.common.schemas import DetailExtraction
+from io import BytesIO
+from PIL import Image
+from pdf2image import convert_from_path  # NEW IMPORT
+from langchain_core.messages import HumanMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
+from pydantic import BaseModel, Field
+from typing import List, Optional
+from langgraph_temp_workflow.workflows.estimation.prompt import prompt_for_map_page_layout
+from langgraph_temp_workflow.workflows.estimation.prompt import prompt_for_extract_single_detail
 load_dotenv()
 
 # --- 1. SETUP MODELS ---
@@ -160,274 +167,12 @@ def crop_union_tables(json_path, image_path, output_dir="debug_crops"):
             # This handles tables that MinerU found perfectly without a separate title
             pass 
 
-
-
-# def extract_detail_components_with_crops(pdf_layout_path: str,json_path:str,images_dir:str):
-#     # 2. Load JSON (Text Data)
-#     with open(json_path, 'r') as f:
-#         json_data = json.load(f)
-#         # Filter for text only to keep prompt clean
-#         text_data = [item for item in json_data if item["type"] == "text"]
-#         json_string = json.dumps(text_data, indent=2)
-
-#     # 3. Prepare Content List for Gemini
-#     contents_payload = []
-
-#     # A. Add the Prompt
-#     prompt = f"""
-#     You are a Senior Structural Detailer creating a "Standard Definition Library".
-    
-#     ### INPUTS PROVIDED:
-#     1. **Layout PDF:** Shows the full page structure (Global Map).
-#     2. **Cropped Images:** High-resolution zooms of Drawings and Tables.
-#     3. **Text JSON:** OCR text blocks (Notes, Dimensions) with coordinates.
-
-#     ### YOUR GOAL
-#     Visually group ALL elements (Drawings + Tables + Text Notes) into distinct **"Detail Units"** based on the Title location.
-
-#     ---
-#     ### MULTIMODAL CHAIN-OF-THOUGHT PROCESS:
-
-#     **STEP 1: IDENTIFY THE ANCHOR (The Title)**
-#     - Find the Title Text (e.g., "TYP. FOUNDATION INFLUENCE DETAIL").
-#     - Find the Bubble Number (e.g., "5/S-3.0").
-
-#     **STEP 2: GATHER COMPONENTS (The Grouping)**
-#     - Look **ABOVE** the Title in the Layout PDF.
-#     - **Drawings:** Find the Cropped Image that sits above the title.
-#     - **Tables:** Find any Cropped Image that looks like a grid/schedule above the title.
-#     - **NOTES (CRITICAL):** Look at the **Text JSON**. Find text blocks that are physically located inside the detail's boundary (usually above the title and near the drawing).
-#         - *Example:* "CONSTRUCTION JOINT NOTES: 1. SEE PLAN..."
-#         - *Action:* Include this text in the extraction.
-
-#     **STEP 3: EXTRACT INGREDIENTS (Verbatim)**
-#     - Read the leader lines in the Drawing.
-#     - Read the rows in the Table.
-#     - Read the bullet points in the Notes.
-#     - **CRITICAL RULE:** Extract material names **EXACTLY AS WRITTEN**.
-
-#     **STEP 4: DEFINE LOGIC (Fixed vs Variable)**
-#     - Decide if the item count is constant (Fixed) or depends on height/width (Variable).
-
-#     ---
-#     ### OUTPUT FORMAT (JSON List)
-#     [
-#       {{
-#         "detail_id": "5/S-3.0",
-#         "title": "TYP. FOUNDATION INFLUENCE DETAIL",
-#         "source_trace": "Grouped Image 'crop_01.jpg', Table 'crop_02.jpg', and Text Block 'CONSTRUCTION JOINT NOTES'",
-#         "visual_reasoning": "I see a drawing of a footing, a table of dowel sizes, and a list of notes. All belong to Detail 5.",
-#         "materials": [
-#           {{
-#             "item_name": "5/8\" DIA. x 1'-0\"", 
-#             "material_type": "ROD",
-#             "qty_rule": "FIXED: Per Table Row",
-#             "notes": "From Dowel Schedule"
-#           }},
-#           {{
-#             "item_name": "#4 x 2'-0\" @ 24\" O.C.",
-#             "material_type": "ROD",
-#             "qty_rule": "VARIABLE: Wall Length",
-#             "notes": "From Drawing Leader"
-#           }}
-#         ],
-#         "fabrication": {{ ... }}
-#       }}
-#     ]
-#     """
-  
-#     contents_payload.append(types.Part.from_text(text=prompt))
-
-#     # B. Add the Layout PDF (Global Context)
-#     with open(pdf_layout_path, "rb") as f:
-#         contents_payload.append(types.Part.from_bytes(
-#             data=f.read(),
-#             mime_type='application/pdf'
-#         ))
-
-#     # C. Add All Cropped Images (Local Precision)
-#     if os.path.exists(images_dir):
-#         image_files = [f for f in os.listdir(images_dir) if f.endswith(('.jpg', '.png'))]
-#         print(f"Loading {len(image_files)} cropped images...")
-        
-#         for img_file in image_files:
-#             img_path = os.path.join(images_dir, img_file)
-#             with open(img_path, "rb") as f:
-#                 # We add the filename as text context so the model knows which image is which
-#                 contents_payload.append(types.Part.from_text(text=f"Image File: {img_file}"))
-#                 contents_payload.append(types.Part.from_bytes(
-#                     data=f.read(),
-#                     mime_type='image/jpeg'
-#                 ))
-
-#     # D. Add the JSON Text Data
-#     contents_payload.append(types.Part.from_text(text=f"OCR Text Data:\n{json_string}"))
-#     msg = HumanMessage(content=contents_payload)
-
-#     # 4. Call Gemi
-
-#     try:
-#         result = llm_pro.with_structured_output(DetailList).invoke([msg])
-#         return result # Returns DetailList object
-#     except Exception as e:
-#         print(f"Error in extraction: {e}")
-#         return None
-
-import os
-import json
-import base64
-from io import BytesIO
-from PIL import Image
-from pdf2image import convert_from_path  # NEW IMPORT
-from langchain_core.messages import HumanMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
-from pydantic import BaseModel, Field
-from typing import List, Optional
-
-
-
 # --- HELPER ---
 def image_to_base64(image_obj):
     buff = BytesIO()
     image_obj.save(buff, format="PNG")
     return base64.b64encode(buff.getvalue()).decode("utf-8")
 
-# # --- MAIN FUNCTION ---
-# def extract_detail_components_with_crops(pdf_layout_path: str, json_path: str, images_dir: str):
-    
-#     # 1. Load JSON (Text Data)
-#     with open(json_path, 'r') as f:
-#         json_data = json.load(f)
-#         text_data = [item for item in json_data if item["type"] == "text"]
-#         json_string = json.dumps(text_data, indent=2)
-
-#     # 2. Convert Layout PDF to Image (PNG)
-#     # This solves the "Invalid Mime Type" issue
-#     print(f"   > Converting Layout PDF to Image: {pdf_layout_path}")
-#     try:
-#         layout_images = convert_from_path(pdf_layout_path)
-#         if not layout_images:
-#             print("   ! Failed to convert PDF layout.")
-#             return None
-#         layout_image_b64 = image_to_base64(layout_images[0]) # Take first page
-#     except Exception as e:
-#         print(f"   ! PDF Conversion Error: {e}")
-#         return None
-
-#     # 3. Build Payload (LangChain Dictionary Format)
-#     contents_payload = []
-
-#     # A. Prompt
-#     prompt = f"""
-#     You are a Senior Structural Detailer creating a "Standard Definition Library".
-    
-#     ### INPUTS PROVIDED:
-#     1. **Layout PDF:** Shows the full page structure (Global Map).
-#     2. **Cropped Images:** High-resolution zooms of Drawings and Tables.
-#     3. **Text JSON:** OCR text blocks (Notes, Dimensions) with coordinates.
-
-#     ### YOUR GOAL
-#     Visually group ALL elements (Drawings + Tables + Text Notes) into distinct **"Detail Units"** based on the Title location.
-
-#     ---
-#     ### MULTIMODAL CHAIN-OF-THOUGHT PROCESS:
-
-#     **STEP 1: IDENTIFY THE ANCHOR (The Title)**
-#     - Find the Title Text (e.g., "TYP. FOUNDATION INFLUENCE DETAIL").
-#     - Find the Bubble Number (e.g., "5/S-3.0").
-#     - **CRITICAL:** Extract ONLY the number inside the bubble. Do NOT include the sheet number (e.g. if it says "5/S-3.0", extract "5").
-
-
-#     **STEP 2: GATHER COMPONENTS (The Grouping)**
-#     - Look **ABOVE** the Title in the Layout PDF.
-#     - **Drawings:** Find the Cropped Image that sits above the title.
-#     - **Tables:** Find any Cropped Image that looks like a grid/schedule above the title.
-#     - **NOTES (CRITICAL):** Look at the **Text JSON**. Find text blocks that are physically located inside the detail's boundary (usually above the title and near the drawing).
-#         - *Example:* "CONSTRUCTION JOINT NOTES: 1. SEE PLAN..."
-#         - *Action:* Include this text in the extraction.
-
-#     **STEP 3: EXTRACT INGREDIENTS (Verbatim)**
-#     - Read the leader lines in the Drawing.
-#     - Read the rows in the Table.
-#     - Read the bullet points in the Notes.
-#     - **CRITICAL RULE:** Extract material names **EXACTLY AS WRITTEN**.
-
-#     **STEP 4: DEFINE LOGIC (Fixed vs Variable)**
-#     - Decide if the item count is constant (Fixed) or depends on height/width (Variable).
-
-#     ---
-#     ### OUTPUT FORMAT (JSON List)
-#     [
-#       {{
-#         "detail_number": "5", 
-#         "title": "TYP. FOUNDATION INFLUENCE DETAIL",
-#         "source_trace": "Grouped Image 'crop_01.jpg', Table 'crop_02.jpg', and Text Block 'CONSTRUCTION JOINT NOTES'",
-#         "visual_reasoning": "I see a drawing of a footing, a table of dowel sizes, and a list of notes. All belong to Detail 5.",
-#         "materials": [
-#           {{
-#             "item_name": "5/8\" DIA. x 1'-0\"", 
-#             "material_type": "ROD",
-#             "qty_rule": "FIXED: Per Table Row",
-#             "notes": "From Dowel Schedule"
-#           }},
-#           {{
-#             "item_name": "#4 x 2'-0\" @ 24\" O.C.",
-#             "material_type": "ROD",
-#             "qty_rule": "VARIABLE: Wall Length",
-#             "notes": "From Drawing Leader"
-#           }}
-#         ],
-#         "fabrication": {{ ... }}
-#       }}
-#     ]
-#     """
-  
-    
-#     contents_payload.append({"type": "text", "text": prompt})
-
-#     # B. Add Layout Image (Converted from PDF)
-#     contents_payload.append({
-#         "type": "image_url", 
-#         "image_url": {"url": f"data:image/png;base64,{layout_image_b64}"}
-#     })
-
-#     # C. Add Cropped Images
-#     if os.path.exists(images_dir):
-#         image_files = [f for f in os.listdir(images_dir) if f.endswith(('.jpg', '.png'))]
-#         print(f"   > Loading {len(image_files)} cropped images...")
-        
-#         for img_file in image_files:
-#             img_path = os.path.join(images_dir, img_file)
-#             with open(img_path, "rb") as f:
-#                 img_b64 = base64.b64encode(f.read()).decode("utf-8")
-                
-#                 # Context: Filename
-#                 contents_payload.append({"type": "text", "text": f"Image File: {img_file}"})
-                
-#                 # Image Data
-#                 contents_payload.append({
-#                     "type": "image_url", 
-#                     "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
-#                 })
-
-#     # D. Add JSON Text
-#     contents_payload.append({"type": "text", "text": f"OCR Text Data:\n{json_string}"})
-
-#     # 4. Call Gemini
-#     print("   > Sending MinerU data to Gemini...")
-    
-#     msg = HumanMessage(content=contents_payload)
-
-#     try:
-#         # Use Structured Output
-#         result = llm_pro.with_structured_output(DetailList).invoke([msg])
-#         return result # Returns DetailList object
-#     except Exception as e:
-#         print(f"Error in extraction: {e}")
-#         return None
-
-
-# --- SCHEMAS FOR MAPPER ---
 class DetailGroup(BaseModel):
     detail_id: str = Field(description="The unique ID e.g. '7/S-3.2'")
     title: str = Field(description="The title text e.g. 'LADDER DETAIL'")
@@ -460,26 +205,7 @@ def map_page_layout(pdf_layout_path: str, json_path: str, images_dir: str):
         return []
 
     # 3. Prompt
-    prompt = f"""
-    You are a Layout Analysis Engine.
-    I have parsed a PDF page into a list of items (Images, Text).
-    
-    ### INPUTS:
-    1. **Layout Image:** Shows the visual arrangement.
-    2. **JSON List:** The detected items with IDs.
-    
-    ### TASK:
-    Group these items into **Logical Detail Units**.
-    - A "Detail Unit" usually has a **Title** (Text) at the bottom.
-    - Above the title, there are **Drawings** (Images) and **Notes** (Text).
-    - **CRITICAL:** One Detail might have MULTIPLE images (e.g. a Plan View + a Section View + a Table). Group them all under the same Title.
-    
-    ### OUTPUT:
-    Return a list of `DetailGroup` objects.
-    - `detail_id`: Extract the number from the bubble (e.g. "7/S-3.2").
-    - `image_files`: List the filenames of the images in this group (look at the JSON 'img_path').
-    - `text_blocks`: List the full text of any notes in this group.
-    """
+    prompt = prompt_for_map_page_layout()
     
     msg = HumanMessage(content=[
         {"type": "text", "text": prompt},
@@ -506,22 +232,9 @@ def extract_single_detail(group: DetailGroup, images_dir: str):
     payload = []
     
     # A. Prompt
-    prompt = f"""
-    You are a Senior Structural Detailer.
-    Analyze this specific detail: **"{group.title}"** ({group.detail_id}).
     
-    ### INPUTS:
-    I have cropped the specific images and text for this detail.
-    
-    ### TASK:
-    Extract the **Bill of Materials (BOM)** and **Fabrication Metrics**.
-    
-    1. **Read Leader Lines:** Look at the images. Extract material names EXACTLY as written.
-    2. **Read Notes:** Look at the text blocks provided.
-    3. **Define Logic:** Fixed vs Variable count.
-    
-    Return the `DetailExtraction` object.
-    """
+    prompt =prompt_for_extract_single_detail(group.title,group.detail_id)
+
     payload.append({"type": "text", "text": prompt})
     
     # B. Add Specific Images
@@ -544,8 +257,14 @@ def extract_single_detail(group: DetailGroup, images_dir: str):
     except Exception as e:
         print(f"   ! Extraction failed for {group.detail_id}: {e}")
         return None
-    
 
+def get_valid_materials_list(excel_path):
+    try:
+        df = pd.read_excel(excel_path, sheet_name="Options")
+        return df.iloc[:, 0].dropna().astype(str).tolist()
+    except:
+        return [] 
+    
 def load_image_base64(image_path: str) -> str:
     with open(image_path, "rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
@@ -874,9 +593,6 @@ def is_box_inside(inner_box, outer_box):
     
     # If >80% of the inner box is covered by the outer box, it's a duplicate/subset
     return (intersection_area / inner_area) > 0.8
-
-
-
 
 def scale_coords_pdf_to_image(coords_dict, pdf_path, image_path):
     img = Image.open(image_path)

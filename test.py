@@ -300,3 +300,8 @@ vector = embedder.embed_query("Test string")
 # 3. Print the size
 print(f"Model: gemini-embedding-001")
 print(f"Actual Vector Dimension: {len(vector)}")
+
+
+
+from langgraph_temp_workflow.common.state import ProjectState
+import json
