@@ -192,7 +192,6 @@
 import os
 import json
 import base64
-import shutil
 from typing import TypedDict, List, Dict, Any, Literal
 from dotenv import load_dotenv
 
@@ -200,13 +199,13 @@ from dotenv import load_dotenv
 from langgraph.graph import StateGraph, START, END
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 # PDF & Image Processing Imports
 import pdfplumber
-from PIL import Image, ImageDraw
+from PIL import Image
 from pypdf import PdfReader, PdfWriter
-from utils.pdf_page_to_png import convert_specific_page_to_png
+from src.utils.pdf_page_to_png import convert_specific_page_to_png
 
 load_dotenv()
 

@@ -1,22 +1,22 @@
 import os 
 import base64
 import json
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 #importing the state
-from langgraph_temp_workflow.common.state import Sementic_Segmentation_State
+from src.langgraph_temp_workflow.common.state import Sementic_Segmentation_State
 
 #util functions
-from langgraph_temp_workflow.common.utils import filter_candidate_coordinates,image_to_data_url,crop_image_dynamic,pil_to_data_url,normalize_bbox,scale_coords_pdf_to_image,load_image_base64
+from src.langgraph_temp_workflow.common.utils import filter_candidate_coordinates,image_to_data_url,crop_image_dynamic,pil_to_data_url,normalize_bbox,scale_coords_pdf_to_image
 
-from utils.croped_sections import find_title_coordinates_from_image_and_pdf 
+from src.utils.croped_sections import find_title_coordinates_from_image_and_pdf
 
 #importing Schemas
-from langgraph_temp_workflow.common.schemas import DetectionOutput,EvaluationOutput,ExtractedContent
+from src.langgraph_temp_workflow.common.schemas import DetectionOutput,EvaluationOutput,ExtractedContent
 
 #importing prompt
-from langgraph_temp_workflow.workflows.segmentation.prompt import prompt_for_detect_regions_node
-from langgraph_temp_workflow.workflows.segmentation.prompt import prompt_for_evaluate_crop_node
-from langgraph_temp_workflow.workflows.segmentation.prompt import prompt_for_extract_content_node
+from src.langgraph_temp_workflow.workflows.segmentation.prompt import prompt_for_detect_regions_node
+from src.langgraph_temp_workflow.workflows.segmentation.prompt import prompt_for_evaluate_crop_node
+from src.langgraph_temp_workflow.workflows.segmentation.prompt import prompt_for_extract_content_node
 
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI

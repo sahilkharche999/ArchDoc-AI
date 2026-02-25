@@ -1,19 +1,12 @@
-import base64
 import cv2
-import re 
-from typing import  List
+import re
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage
 from dotenv import load_dotenv
 import pdfplumber
-import json
-from PIL import Image, ImageDraw, ImageFont
-from io import BytesIO
+from PIL import ImageDraw
 from google import genai
-from google.genai import types
-import json
 import os
-from langgraph_temp_workflow.common.schemas import DetailList,DetailExtraction
+from src.langgraph_temp_workflow.common.schemas import DetailExtraction
 
 load_dotenv()
 
@@ -280,10 +273,8 @@ from io import BytesIO
 from PIL import Image
 from pdf2image import convert_from_path  # NEW IMPORT
 from langchain_core.messages import HumanMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
-from typing import List, Optional
-
+from typing import List
 
 
 # --- HELPER ---

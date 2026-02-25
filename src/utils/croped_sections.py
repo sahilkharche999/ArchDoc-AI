@@ -1,23 +1,15 @@
-from langgraph.graph import StateGraph, START, END
 import base64
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
-from typing import TypedDict, List
 from dotenv import load_dotenv
 import os
 import fitz
-import pdfplumber
-from pdfplumber import open as pdf_open
-from PIL import Image, ImageDraw, ImageFont
-from utils.pdf_page_to_png import convert_specific_page_to_png
-from utils.pdf_create import extracte_pdf
+from PIL import ImageDraw
+from src.utils.pdf_page_to_png import convert_specific_page_to_png
+from src.utils.pdf_create import extracte_pdf
 from pydantic import BaseModel
-from typing import Literal
-import cv2 
 from PIL import Image
 import pdfplumber
-import cv2
-import random
 import json
 load_dotenv()
 

@@ -1,17 +1,15 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import json
 import time
 import os
 import shutil
-from PIL import Image
 from pypdf import PdfReader, PdfWriter
 from pdf2image import convert_from_path
 
 # --- IMPORT YOUR UTILS ---
 # Ensure this path is correct relative to where you run 'streamlit run app.py'
-from utils.minerU_pdf_reading import minerU_pdf_creating_extration
+from src.utils import minerU_pdf_creating_extration
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(

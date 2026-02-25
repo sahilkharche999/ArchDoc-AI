@@ -1,9 +1,9 @@
 
 from langgraph.graph import StateGraph, START, END
-from langgraph_temp_workflow.common.state import Sementic_Segmentation_State
-from langgraph_temp_workflow.workflows.segmentation.node import detect_regions_node
-from langgraph_temp_workflow.workflows.segmentation.node import select_next_node
-from langgraph_temp_workflow.workflows.segmentation.node import evaluate_crop_node
+from src.langgraph_temp_workflow.common.state import Sementic_Segmentation_State
+from src.langgraph_temp_workflow.workflows.segmentation.node import detect_regions_node
+from src.langgraph_temp_workflow.workflows.segmentation.node import select_next_node
+from src.langgraph_temp_workflow.workflows.segmentation.node import evaluate_crop_node
 
 workflow = StateGraph(Sementic_Segmentation_State)
 workflow.add_node("detect", detect_regions_node)

@@ -2,7 +2,6 @@ import os
 import json
 import base64
 import re
-import shutil
 from typing import TypedDict, List, Dict, Any, Literal, Optional
 from dotenv import load_dotenv
 # LangChain / LangGraph Imports
@@ -15,17 +14,15 @@ from pydantic import BaseModel, Field
 
 # PDF & Image Processing Imports
 import pdfplumber
-from PIL import Image
 from pypdf import PdfReader, PdfWriter
 
 
 # ---  CUSTOM UTILS ---
-from utils.crop_in_quandrant import crop_image_into_quad
-from utils.croped_sections import crop_sections_from_page
-from utils.pdf_page_to_png import convert_specific_page_to_png
-from utils.sementic_segmentation import semantic_segmentation_app
-from utils.easy_ocr import image_ocr_with_cords
-# from u import 
+from src.utils.croped_sections import crop_sections_from_page
+from src.utils.pdf_page_to_png import convert_specific_page_to_png
+from src.utils.sementic_segmentation import semantic_segmentation_app
+
+# from u import
 load_dotenv()
 
 

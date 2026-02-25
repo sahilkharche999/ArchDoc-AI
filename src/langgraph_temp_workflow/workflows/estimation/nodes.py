@@ -1,60 +1,43 @@
 import os
 import json
 
-from google.genai import types
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
-from typing import  Literal, List, Optional, Dict, Any
+from typing import  Literal, List, Optional
 # LangChain / LangGraph Imports
 
-from langgraph.prebuilt import create_react_agent
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage, SystemMessage,AIMessage
 
 # import state from the common/state file 
-from langgraph_temp_workflow.common.state import ProjectState
+from src.langgraph_temp_workflow.common.state import ProjectState
 
 # import schema from the common/schema file 
-from langgraph_temp_workflow.common.schemas import DrawingTypeResponse 
-from langgraph_temp_workflow.common.schemas import DetailExtraction ,DetailList
-from langgraph_temp_workflow.common.schemas import PlanExtraction 
-from langgraph_temp_workflow.common.schemas import FinalEstimation 
-from langgraph_temp_workflow.common.schemas import TextRulesExtraction 
+from src.langgraph_temp_workflow.common.schemas import DrawingTypeResponse
+from src.langgraph_temp_workflow.common.schemas import FinalEstimation
+from src.langgraph_temp_workflow.common.schemas import TextRulesExtraction
 
 #import the schemas 
 
-from langgraph_temp_workflow.workflows.estimation.prompt import prompt_for_node_classify_pages
-from langgraph_temp_workflow.workflows.estimation.prompt import prompt_for_node_process_details
-from langgraph_temp_workflow.workflows.estimation.prompt import prompt_for_node_process_plans
-from langgraph_temp_workflow.workflows.estimation.prompt import prompt_for_agent_4_merger
+from src.langgraph_temp_workflow.workflows.estimation.prompt import prompt_for_node_classify_pages
 
 # import the utils  function 
-from utils.minerU_pdf_reading import minerU_pdf_creating_extration
-from langgraph_temp_workflow.common.utils import crop_union_tables
+from src.utils import minerU_pdf_creating_extration
 # from langgraph_temp_workflow.common.utils import extract_detail_components_with_crops
 
 # import tools
-from langgraph_temp_workflow.tools.graph_tools import lookup_symbol_definition 
-from langgraph_temp_workflow.tools.graph_tools import submit_final_estimate
 
 # import graph DB here
 
-from utils.graph_db import graph_db
+from src.utils import graph_db
 
 # PDF & Image Processing Imports
 import pdfplumber
 from pypdf import PdfReader, PdfWriter
-from utils.pdf_page_to_png import convert_specific_page_to_png
+from src.utils.pdf_page_to_png import convert_specific_page_to_png
 
 # --- CUSTOM UTILS ---
-from utils.croped_sections import crop_sections_from_page
 # from utils.sementic_segmentation import semantic_segmentation_app
-from langgraph_temp_workflow.workflows.segmentation.graph import semantic_segmentation_app
-from langgraph_temp_workflow.common.utils import load_image_base64
-from langgraph_temp_workflow.common.utils import extract_text_from_response
-from langgraph_temp_workflow.common.utils import get_sheet_number
-from langgraph_temp_workflow.common.utils import find_title_coordinates_from_image_and_pdf
-from langgraph_temp_workflow.common.utils import preprocess_image_inplace
+from src.langgraph_temp_workflow.common.utils import get_sheet_number
 
 load_dotenv()
 
@@ -186,7 +169,7 @@ def node_process_text_rules(state: ProjectState):
     return {"general_rules": state["general_rules"]}
 
 # --- 6. AGENT 3: DETAIL PROCESSOR ---
-from langgraph_temp_workflow.common.utils import map_page_layout, extract_single_detail
+from src.langgraph_temp_workflow.common.utils import map_page_layout, extract_single_detail
 
 def node_process_details(state: ProjectState):
     print("--- NODE: Processing Details (MinerU) ---")
@@ -520,7 +503,7 @@ def node_process_details(state: ProjectState):
 #         "general_rules": state["general_rules"]   # Updated with new notes
 #     }
 
-from langgraph_temp_workflow.common.utils import crop_union_tables
+from src.langgraph_temp_workflow.common.utils import crop_union_tables
 
 # def node_process_plans(state: ProjectState):
 #     print("--- NODE: Agent 2 (Plan Scanner & Ingestion) ---")
@@ -816,12 +799,7 @@ def node_process_plans(state: ProjectState):
 
 # --- 8. AGENT 4: THE LOGIC MERGER ---
 
-from langgraph.prebuilt import create_react_agent
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from langgraph_temp_workflow.tools.graph_tools import lookup_symbol_definition, submit_final_estimate
-from langgraph_temp_workflow.common.utils import load_image_base64
 # Import the new utility
-from utils.symbol_detection import detect_and_read_symbols 
 import pandas as pd
 
 def get_valid_materials_list(excel_path):
@@ -953,11 +931,9 @@ def get_valid_materials_list(excel_path):
 #         return {"final_bill_of_materials": {"error": str(e)}}
 
 
-from langgraph.prebuilt import create_react_agent
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from langgraph_temp_workflow.tools.graph_tools import lookup_symbol_definition, submit_final_estimate
-from langgraph_temp_workflow.common.utils import load_image_base64
-from utils.symbol_detection import detect_and_read_symbols 
+from langchain_core.messages import HumanMessage
+from src.langgraph_temp_workflow.common.utils import load_image_base64
+from src.utils.symbol_detection import detect_and_read_symbols
 import pandas as pd
 
 def get_valid_materials_list(excel_path):
