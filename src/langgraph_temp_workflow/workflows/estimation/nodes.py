@@ -470,3 +470,4 @@ def node_agent_4_merger(state: ProjectState):
         except Exception as e:
             print(f"    ! Estimation failed for {filename}: {e}")
     return {"final_bill_of_materials": {"final_bill_of_materials": [item.model_dump() for item in all_extracted_items]}}   
+
