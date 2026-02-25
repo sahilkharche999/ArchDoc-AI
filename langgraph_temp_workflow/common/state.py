@@ -8,8 +8,9 @@ class ProjectState(TypedDict):
     page_map: Dict[int, str] 
     detail_library: Dict[str, Any] 
     general_rules: str 
-    raw_plan_data: List[Dict] # Output from Agent 2
+    # raw_plan_data: List[Dict] # Output from Agent 2
     final_bill_of_materials: Dict # Output from Agent 4
+    floor_plan_images:List[str]
     
 class Sementic_Segmentation_State(TypedDict):
     image_path: str

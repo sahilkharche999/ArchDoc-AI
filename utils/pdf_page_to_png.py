@@ -16,7 +16,7 @@ def convert_specific_page_to_png(pdf_path,page_num,output_image_path,dpi=300):
 
 
 if __name__=='__main__':
- convert_specific_page_to_png('../extracted_pages.pdf', 8, 'output_page_8.png')
+ convert_specific_page_to_png('Anderson WTP 1 Plans for ai.pdf', 64, 'FLOORPLAN302.png')
 
 
 

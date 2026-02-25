@@ -1,0 +1,127 @@
+#  TYP. WALL SECTION
+#                   190.3199005126953,
+#                   472.628173828125,
+#                   542.8719482421875,
+#                   503.7408447265625
+
+# TYP. WALL SECTION @ GIRDER
+#                   956.3995971679688,  
+#                   472.628173828125,
+#                   1485.8123779296875,
+#                   503.7408447265625
+
+# SECTION @ INT. SHEAR WALL
+#                   1664.519287109375,
+#                   472.628173828125,
+#                   2171.50634765625,
+#                   503.7408447265625. :
+
+# SECTION @ FURRING WALL
+#                   190.3199005126953,
+#                   990.5481567382812,
+#                   656.0225830078125,
+#                   1021.6607666015625
+
+# SECTION @ ENTRANCE
+#                   956.3995971679688,
+#                   990.5481567382812,
+#                   1347.623291015625,
+#                   1021.6607666015625
+# SECTION @ ENTRANCE
+#                   1664.519287109375,
+#                   990.5481567382812,
+#                   2055.742919921875,
+#                   1021.6607666015625
+# SECTION @ LIGHT
+#                   190.3199005126953,
+#                   1399.0278930664062,
+#                   497.18597412109375,
+#                   1430.
+                  
+
+
+
+SCALED_COORDS=[
+    {
+        "page_name": "page_0",
+        ""
+        "image_path": "section/page_0.png",
+        "coords": {
+            "TYP. REINF. ARRANGMENTS AT CORNERS": {"x1": 853, "y1": 2094, "x2": 3869, "y2": 2198},
+            "TYP. STEPPED FOOTING": {"x1": 6990, "y1": 2094, "x2": 8734, "y2": 2198},
+            "TYP. UTILITIES UNDER SLAB OR WALL FOOTING": {"x1": 853, "y1": 3844, "x2": 3180, "y2": 4094},
+            "TYP. COLUMN ISOLATION JOINTS": {"x1": 3922, "y1": 3990, "x2": 6361, "y2": 4094},
+            "TYP. FOUNDATION INFLUENCE DETAIL": {"x1": 6990, "y1": 3844, "x2": 9218, "y2": 4094},
+            "TYP. JOINTS IN SLAB ON GRADE": {"x1": 853, "y1": 6764, "x2": 3201, "y2": 6868},
+            "TYP. EXCAVATIONS PARALLEL TO WALL FOOTING": {"x1": 3922, "y1": 6618, "x2": 6384, "y2": 6868},
+            "TYP. INTERIOR FOOTING": {"x1": 6990, "y1": 6764, "x2": 8777, "y2": 6868},
+        }
+    },
+    {
+        "page_name": "page_1",
+        "image_path": "section/page_1.png",
+        "coords": {
+            "HOLDOWN SCHEDULE": {"x1": 851, "y1": 3993, "x2": 2431, "y2": 4097},
+            "TYP. SLAB AT FLOOR DRAIN": {"x1": 7013, "y1": 3993, "x2": 9043, "y2": 4097},
+            "TYP. CONCRETE SLAB DETAILS": {"x1": 851, "y1": 6765, "x2": 3112, "y2": 6869},
+            "TYP. TRENCH DETAIL": {"x1": 3943, "y1": 6765, "x2": 5490, "y2": 6869},
+            "TYP. DEPRESSED SLAB ON GRADE": {"x1": 7013, "y1": 6765, "x2": 9482, "y2": 6869},
+        }
+    },
+    {
+        "page_name": "page_2",
+        "image_path": "section/page_2.png",
+        "coords": {
+            "TYP. EXT. WALL FOOTING": {"x1": 867, "y1": 2627, "x2": 2726, "y2": 2731},
+            "WALL FOOTING @ HOLD DOWN": {"x1": 3943, "y1": 2627, "x2": 6129, "y2": 2731},
+            "WALL FOOTING @ SHEAR WALL": {"x1": 6996, "y1": 2627, "x2": 9232, "y2": 2731},
+            "WALL FOOTING AT FURRING WALL": {"x1": 867, "y1": 4852, "x2": 3369, "y2": 4956},
+            "FOUNDATION @ INT. SHEAR WALL": {"x1": 3943, "y1": 4852, "x2": 6380, "y2": 4956},
+            "TYP. EXT. FOOTING AT PARTIAL SLAB": {"x1": 6996, "y1": 4706, "x2": 9314, "y2": 4956},
+            "LADDER DETAIL": {"x1": 6996, "y1": 6737, "x2": 8147, "y2": 6841},
+        }
+    },
+    {
+        "page_name": "page_3",
+        "image_path": "section/page_3.png",
+        "coords": {
+            "TYP. OPENING ELEVATION": {"x1": 813, "y1": 2197, "x2": 2737, "y2": 2301},
+            "BUILT UP POST": {"x1": 4674, "y1": 2197, "x2": 5792, "y2": 2301},
+            "TYP. NON-LOAD BEARING WALL": {"x1": 6965, "y1": 2197, "x2": 9255, "y2": 2301},
+            "TYP. SHEAR WALL ELEVATION": {"x1": 813, "y1": 4482, "x2": 3010, "y2": 4586},
+            "SECTION AT CANOPY": {"x1": 4067, "y1": 4482, "x2": 5609, "y2": 4586},
+            "BUILT UP BEAM NAILING PATTERN": {"x1": 6965, "y1": 4482, "x2": 9494, "y2": 4586},
+            "CORNER FRAMING DETAIL": {"x1": 813, "y1": 6762, "x2": 2714, "y2": 6866},
+            "ROOF DIAPHRAGM NAILING": {"x1": 3144, "y1": 6762, "x2": 5134, "y2": 6866},
+            "TYP. TOP PLATE SPLICE": {"x1": 5576, "y1": 6762, "x2": 7320, "y2": 6866},
+            "TYP. SPLICE SECTION": {"x1": 7693, "y1": 6762, "x2": 9278, "y2": 6866},
+        }
+    },
+    {
+        "page_name": "page_4",
+        "image_path": "section/page_4.png",
+        "coords": {
+            "TYP. WALL SECTION": {"x1": 792, "y1": 1989, "x2": 2261, "y2": 2093},
+            "TYP. WALL SECTION @ GIRDER": {"x1": 3984, "y1": 1989, "x2": 6190, "y2": 2093},
+            "SECTION @ INT. SHEAR WALL": {"x1": 6935, "y1": 1989, "x2": 9047, "y2": 2093},
+            "SECTION @ FURRING WALL": {"x1": 792, "y1": 4147, "x2": 2733, "y2": 4251},
+            "SECTION @ ENTRANCE": {"x1": 3984, "y1": 4147, "x2": 5615, "y2": 4251},
+            "SECTION @ LIGHT": {"x1": 792, "y1": 5849, "x2": 2071, "y2": 5953},
+            "TYP. INT. TRUSS BRG.": {"x1": 3162, "y1": 5849, "x2": 4760, "y2": 5953},
+            "TYP. END COLUMN": {"x1": 5549, "y1": 5849, "x2": 6903, "y2": 5953},
+            "SECTION @ ROOF HATCH": {"x1": 7746, "y1": 5849, "x2": 9534, "y2": 5953},
+            "MECH UNIT SUPPORT": {"x1": 5549, "y1": 6769, "x2": 7114, "y2": 6873},
+        }
+    },
+    {
+        "page_name": "page_5",
+        "image_path": "section/page_5.png",
+        "coords": {
+            "DUMPSTER ENCLOSURE FOUNDATION PLAN": {"x1": 812, "y1": 2982, "x2": 2557, "y2": 3232},
+            "DUMPSTER ENCLOSURE WALL": {"x1": 3500, "y1": 3128, "x2": 5690, "y2": 3232},
+            "DUMPSTER SLAB EDGE": {"x1": 6953, "y1": 3128, "x2": 8625, "y2": 3232},
+            "TYP. DETAIL OF LOW-LIFT REINFORCED CMU": {"x1": 3500, "y1": 6579, "x2": 5367, "y2": 6829},
+            "TYPICAL CMU WALL CORNERS AND INTERSECTIONS": {"x1": 6953, "y1": 6579, "x2": 9503, "y2": 6829},
+        }
+    },
+]

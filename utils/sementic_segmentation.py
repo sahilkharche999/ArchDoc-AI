@@ -348,7 +348,7 @@ semantic_segmentation_app = workflow.compile()
 # --- RUN ---
 
 if __name__ == "__main__":
-    input_image = "utils/floor_1.png" 
+    input_image = "FLOORPLAN302.png" 
     
     if os.path.exists(input_image):
         print(f"Processing {input_image}...")

@@ -5,28 +5,33 @@ import re
 import shutil
 from typing import TypedDict, List, Dict, Any, Literal, Optional
 from dotenv import load_dotenv
-
 # LangChain / LangGraph Imports
 from langgraph.graph import StateGraph, START, END
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 
+
+
 # PDF & Image Processing Imports
 import pdfplumber
 from PIL import Image
 from pypdf import PdfReader, PdfWriter
-from utils.pdf_page_to_png import convert_specific_page_to_png
 
-# --- YOUR CUSTOM UTILS ---
+
+# ---  CUSTOM UTILS ---
 from utils.crop_in_quandrant import crop_image_into_quad
 from utils.croped_sections import crop_sections_from_page
-
+from utils.pdf_page_to_png import convert_specific_page_to_png
+from utils.sementic_segmentation import semantic_segmentation_app
+from utils.easy_ocr import image_ocr_with_cords
+# from u import 
 load_dotenv()
+
 
 # --- 1. SETUP MODELS ---
 llm_pro = ChatGoogleGenerativeAI(model="gemini-3-pro-preview") 
-llm_flash = ChatGoogleGenerativeAI(model="gemini-2.0-flash") 
+llm_flash = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite") 
 
 # --- 2. DEFINE STATE ---
 class ProjectState(TypedDict):
@@ -37,6 +42,7 @@ class ProjectState(TypedDict):
     general_rules: str 
     raw_plan_data: List[Dict] # Output from Agent 2
     final_bill_of_materials: Dict # Output from Agent 4
+    
 
 # --- 3. HELPER FUNCTIONS ---
 
@@ -47,6 +53,35 @@ def load_image_base64(image_path: str) -> str:
 # --- TITLE FINDING LOGIC (FIXED WITH NORMALIZATION) ---
 # We keep this LOCAL to agent.py to ensure the "No Title Found" fix is applied
 # before passing coords to your utility.
+
+
+import cv2
+
+def preprocess_image_inplace(image_path):
+    img = cv2.imread(image_path)
+    if img is None:
+        print(f"Could not read image: {image_path}")
+        return False
+
+    # Convert to grayscale
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # Denoise
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    # Adaptive threshold
+    processed = cv2.adaptiveThreshold(
+        blur,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        11,
+        2
+    )
+
+    cv2.imwrite(image_path, processed)
+    return True
+
 
 def normalize_text(text):
     """Removes punctuation and extra spaces for better matching."""
@@ -137,7 +172,11 @@ def extract_text_from_response(response):
 
 def get_sheet_number(image_path: str) -> str:
     image_b64 = load_image_base64(image_path)
-    prompt = "Look at the BOTTOM RIGHT CORNER. Extract the SHEET NUMBER (e.g., S-3.2)."
+    prompt = """
+    Look at the BOTTOM RIGHT CORNER. Extract the SHEET NUMBER.
+    Examples: "S-1.0", "S-3.2".
+    Return ONLY the sheet number text. Do not write a sentence.
+    """
     msg = HumanMessage(content=[
         {"type": "text", "text": prompt},
         {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}}
@@ -383,18 +422,60 @@ def node_process_plans(state: ProjectState):
     
     for page_num in floor_pages:
         print(f"Scanning Page Index {page_num}...")
+        
         page_dir = f"{state['output_dir']}/floor_{page_num}"
+        page_img_path = f"{state['output_dir']}/floor_{page_num}.png"
+        semantic_crops_dir = f"{state['output_dir']}/floor_{page_num}"
+        convert_specific_page_to_png(state["pdf_path"], page_num, page_img_path, dpi=300)
         
-        convert_specific_page_to_png(state["pdf_path"], page_num, f"{page_dir}.png", dpi=300)
+        # convert_specific_page_to_png(state["pdf_path"], page_num, f"{page_dir}.png", dpi=300)
         
-        # Using YOUR utility
-        crop_image_into_quad(f"{page_dir}.png", page_dir)
+        # Crop in quad function call 
+        # crop_image_into_quad(f"{page_dir}.png", page_dir)
+
+ 
+        #calling the langraph agent to get the sementic croping of the same plan
+        #it save the croped image in the folder name as file_name
         
-        quads = []
-        if os.path.exists(page_dir):
-            quads = [os.path.join(page_dir, f) for f in os.listdir(page_dir) if f.endswith(".png")]
+        child_initial_state = {
+            "image_path": page_img_path, 
+            "detected_queue": [], 
+            "final_crops": [], 
+            "current_retry_count": 0,
+            "current_region_label": None, 
+            "current_bbox": None,
+            "output_dir": state["output_dir"], # Pass the base output dir
+            "extracted_data": {}
+        }
+        # call to the sementic segementation code to get the focused image 
+        semantic_segmentation_app.invoke(child_initial_state, config={"recursion_limit": 150})
+
+        # it will stores the sementic segemntation image in the folder named as floor/roof
+        sementic_croped_images = [] 
+        plan_croped_image:str
         
-        quads.insert(0, f"{page_dir}.png")
+        if os.path.exists(semantic_crops_dir):
+            for f in os.listdir(semantic_crops_dir):
+                if f.endswith(".png"):
+                    img_path = os.path.join(semantic_crops_dir, f)
+
+                    success = preprocess_image_inplace(img_path)
+                    if success:
+                        sementic_croped_images.append(img_path)
+             
+            print(f" > Found {len(sementic_croped_images)-1} semantic crops (processed in-place).")
+        else:
+            print(f" ! Warning: No semantic crops found at {semantic_crops_dir}")
+        
+        # if os.path.exists(semantic_crops_dir):
+        #     for f in os.listdir(semantic_crops_dir):
+        #         if f.endswith(".png"):
+        #             #here we will do ml/dl operation over image to convert into grey scale or Adaptive threshold
+        #             sementic_croped_images.append(os.path.join(semantic_crops_dir, f))
+
+        #     print(f"  > Found {len(sementic_croped_images)-1} semantic crops.")
+        # else:
+        #     print(f"  ! Warning: No semantic crops found at {semantic_crops_dir}")
         
         # --- ADVANCED PROMPT FOR AGENT 2 ---
         prompt = """
@@ -449,7 +530,7 @@ def node_process_plans(state: ProjectState):
         """
         
         content = [{"type": "text", "text": prompt}]
-        for q in quads:
+        for q in sementic_croped_images:
             content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{load_image_base64(q)}"}} )
             
         msg = HumanMessage(content=content)

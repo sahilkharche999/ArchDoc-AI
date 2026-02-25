@@ -15,10 +15,9 @@ workflow.add_node("agent_4_merger", node_agent_4_merger)
 
 workflow.add_edge(START, "classify")
 workflow.add_edge("classify", "process_text")
-workflow.add_edge("classify", "process_details")
 workflow.add_edge("process_text", "process_plans")
-workflow.add_edge("process_details", "process_plans")
-workflow.add_edge("process_plans", "agent_4_merger")
+workflow.add_edge("process_plans", "process_details")
+workflow.add_edge("process_details", "agent_4_merger")
 workflow.add_edge("agent_4_merger", END)
 
 main_workflow = workflow.compile()

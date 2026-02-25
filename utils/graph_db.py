@@ -1,4 +1,5 @@
 from neo4j import GraphDatabase
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 import os
 from dotenv import load_dotenv
 
@@ -6,137 +7,194 @@ load_dotenv()
 
 class ConstructionGraph:
     def __init__(self):
-        # Connection Details
-        uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+        uri = os.getenv("NEO4J_URI")
         user = os.getenv("NEO4J_USERNAME", "neo4j")
-        password = os.getenv("NEO4J_PASSWORD", "password")
-        
+        password = os.getenv("NEO4J_PASSWORD")
         self.driver = GraphDatabase.driver(uri, auth=(user, password))
+        
+        # Initialize Embedding Model
+        self.embedder = GoogleGenerativeAIEmbeddings(model="gemini-embedding-001")
+        
+        # Create Vector Index (Run this once)
+        self.create_vector_index()
 
     def close(self):
         self.driver.close()
 
-    # =========================================================================
-    # 1. AGENT 1: TEXT RULES (The Definitions)
-    # =========================================================================
     
-    def add_schedule_rule(self, schedule_name, symbol, specs, page_num):
-        """
-        Stores a rule from a schedule.
-        Example: Schedule="Shear Wall", Symbol="<1>", Specs="5/8 bolt @ 16oc"
-        """
+    def create_vector_index(self):
+        """Creates a Vector Index on Definition nodes if it doesn't exist."""
         query = """
-        MERGE (s:Schedule {name: $schedule_name})
-        MERGE (p:Page {number: $page_num})
-        MERGE (s)-[:ON_PAGE]->(p)
-        
-        MERGE (r:Rule {symbol: $symbol})
-        SET r.specs = $specs
-        
-        MERGE (s)-[:DEFINES]->(r)
+        CREATE VECTOR INDEX definition_index IF NOT EXISTS
+        FOR (d:Definition)
+        ON (d.embedding)
+        OPTIONS {indexConfig: {
+         `vector.dimensions`: 3072,  
+         `vector.similarity_function`: 'cosine'
+        }}
         """
         with self.driver.session() as session:
-            session.run(query, schedule_name=schedule_name, symbol=symbol, specs=specs, page_num=page_num)
-            print(f"Graph: Added Rule {symbol} to {schedule_name}")
+            session.run(query)
 
-    # =========================================================================
-    # 2. AGENT 3: DETAIL BOM (The Recipes)
-    # =========================================================================
+    # --- INGESTION (With Embeddings) ---
 
-    def add_detail_bom(self, detail_key, title, materials_list, page_num):
+    def add_schedule_rule(self, project_id, schedule_name, symbol, specs, page_num):
+        print(f"DEBUG: Adding Rule {symbol} to {schedule_name}...") # <--- ADD THIS
         """
-        Stores a Detail and its Bill of Materials.
-        Example: Key="7/S-3.2", Materials=[{name: "MC6x15.1", qty: "Variable"}]
+        Stores a rule from a schedule with Vector Embeddings.
         """
-        query = """
-        MERGE (d:Detail {key: $detail_key})
-        SET d.title = $title
-        MERGE (p:Page {number: $page_num})
-        MERGE (d)-[:ON_PAGE]->(p)
+        # 1. Create Description for Embedding
+        # Example: "Symbol: <1>. Schedule: Shear Wall. Specs: 5/8 bolt @ 16oc"
+        try:
+            # 1. Create Description
+            description = f"Symbol: {symbol}. Schedule: {schedule_name}. Specs: {specs}"
+            
+            # 2. Generate Vector
+            print("DEBUG: Generating Vector...") # <--- ADD THIS
+            vector = self.embedder.embed_query(description)
+            print(f"DEBUG: Vector Generated (Size: {len(vector)})") # <--- ADD THIS
+            
         
-        FOREACH (mat IN $materials |
-            MERGE (m:Material {name: mat.item_name})
-            MERGE (d)-[:REQUIRES {qty_rule: mat.qty_rule, notes: mat.notes}]->(m)
-        )
+            # 3. Cypher Query
+            query = """
+            MERGE (proj:Project {id: $project_id})
+            MERGE (p:Sheet {number: $page_num, project: $project_id})
+            MERGE (p)-[:BELONGS_TO]->(proj)
+            
+            // Create/Update Definition Node
+            MERGE (d:Definition {id: $symbol, project: $project_id})
+            SET d:Schedule
+            SET d.name = $schedule_name
+            SET d.specs = $specs
+            
+            // GraphRAG Fields
+            SET d.text = $description
+            SET d.embedding = $vector
+            
+            MERGE (d)-[:FOUND_ON]->(p)
+            """
+        
+        # 4. Execute
+            with self.driver.session() as session:
+                session.run(
+                    query, 
+                    project_id=project_id, 
+                    schedule_name=schedule_name, 
+                    symbol=symbol, 
+                    specs=specs, 
+                    page_num=page_num,
+                    description=description,
+                    vector=vector
+                )
+                print(f"Graph: Added Rule '{symbol}' with Vector.")
+        except Exception as e:
+            print(f"CRITICAL GRAPH ERROR: {e}") # <--- CATCH ERRORS
+
+    def add_detail_bom(self, project_id, detail_key, title, materials_list, page_num):
         """
-        # Clean list for Cypher (Pydantic to Dict)
+        Stores a Detail and its BOM, including Vector Embeddings for GraphRAG.
+        """
+        # 1. Create rich description for embedding
+        # Example: "Detail: 7/S-3.2. Title: Ladder. Contains: MC6x15.1, L4x4"
+        mat_text = ", ".join([m["item_name"] for m in materials_list])
+        description = f"Detail: {detail_key}. Title: {title}. Contains: {mat_text}"
+        
+        # 2. Generate Vector
+        vector = self.embedder.embed_query(description)
+        
+        # 3. Prepare Data for Cypher (Convert Pydantic/Dict to clean list)
         clean_materials = [
             {"item_name": m["item_name"], "qty_rule": m["qty_rule"], "notes": m.get("notes", "")} 
             for m in materials_list
         ]
         
-        with self.driver.session() as session:
-            session.run(query, detail_key=detail_key, title=title, materials=clean_materials, page_num=page_num)
-            print(f"Graph: Added BOM for {detail_key}")
-
-    # =========================================================================
-    # 3. AGENT 2: PLAN INSTANCES (The Map)
-    # =========================================================================
-
-    def add_plan_instance(self, item_type, label, location, associated_text, page_num):
-        """
-        Stores an item found on the floor plan.
-        Crucially, it tries to LINK to a Rule or Detail immediately.
-        """
+        # 4. The Cypher Query
         query = """
-        CREATE (i:Instance {type: $item_type, label: $label})
-        SET i.location = $location
-        SET i.dimension = $associated_text
+        MERGE (proj:Project {id: $project_id})
+        MERGE (p:Sheet {number: $page_num, project: $project_id})
+        MERGE (p)-[:BELONGS_TO]->(proj)
         
-        MERGE (p:Page {number: $page_num})
-        MERGE (i)-[:LOCATED_ON]->(p)
+        // Create/Update the Definition Node
+        MERGE (d:Definition {id: $detail_key, project: $project_id})
+        SET d:Detail
+        SET d.title = $title
+        SET d.text = $description
+        SET d.embedding = $vector
         
-        // AUTOMATIC LINKING LOGIC (Connecting the Dots)
+        MERGE (d)-[:FOUND_ON]->(p)
         
-        // 1. Link to Detail (e.g. Label="7/S-3.2" matches Detail Key)
-        WITH i
-        OPTIONAL MATCH (d:Detail {key: i.label})
-        FOREACH (_ IN CASE WHEN d IS NOT NULL THEN [1] ELSE [] END |
-            MERGE (i)-[:IS_INSTANCE_OF]->(d)
-        )
-
-        // 2. Link to Rule (e.g. Label="<1>" matches Rule Symbol)
-        WITH i
-        OPTIONAL MATCH (r:Rule {symbol: i.label})
-        FOREACH (_ IN CASE WHEN r IS NOT NULL THEN [1] ELSE [] END |
-            MERGE (i)-[:FOLLOWS_RULE]->(r)
+        // Create Component Nodes (The Ingredients)
+        FOREACH (mat IN $materials |
+            MERGE (c:Component {name: mat.item_name, project: $project_id})
+            MERGE (d)-[:CONTAINS {qty_rule: mat.qty_rule, notes: mat.notes}]->(c)
         )
         """
+        
+        # 5. EXECUTE THE QUERY (This is the part you asked for)
         with self.driver.session() as session:
-            session.run(query, item_type=item_type, label=label, location=location, associated_text=associated_text, page_num=page_num)
-            # print(f"Graph: Added Instance {label} at {location}")
+            session.run(
+                query, 
+                project_id=project_id, 
+                detail_key=detail_key, 
+                title=title, 
+                materials=clean_materials, 
+                page_num=page_num,
+                description=description,
+                vector=vector
+            )
+            print(f"Graph: Added Detail BOM '{detail_key}' with Vector.")
 
-    # =========================================================================
-    # 4. AGENT 4: THE MERGER QUERY (The Payoff)
-    # =========================================================================
+    # --- RETRIEVAL (GraphRAG Search) ---
 
-    def get_full_estimation_data(self):
+    def semantic_search(self, query_text, project_id, limit=3):
         """
-        Retrieves all Instances and their connected Definitions.
-        This is the 'Magic Query' that gives Agent 4 everything it needs.
+        Finds the most relevant Definition (Rule/Detail) for a given query.
         """
+        vector = self.embedder.embed_query(query_text)
+        
+        # query = """
+        # CALL db.index.vector.queryNodes('definition_index', $limit, $vector)
+        # YIELD node, score
+        # WHERE node.project = $project_id
+        
+        # // Fetch connected components if it's a Detail
+        # OPTIONAL MATCH (node)-[r:CONTAINS]->(c:Component)
+        
+        # RETURN 
+        #     node.id as ID,
+        #     node.specs as Specs,
+        #     node.title as Title,
+        #     collect({material: c.name, rule: r.qty_rule}) as BOM,
+        #     score
+        # """
+
         query = """
-        MATCH (i:Instance)
+        // 1. Find the Detail Node
+        CALL db.index.vector.queryNodes('definition_index', $limit, $vector)
+        YIELD node, score
+        WHERE node.project = $project_id
         
-        // Get Detail Info if linked
-        OPTIONAL MATCH (i)-[:IS_INSTANCE_OF]->(d:Detail)-[req:REQUIRES]->(m:Material)
+        // 2. Get its Components
+        OPTIONAL MATCH (node)-[r:CONTAINS]->(c:Component)
         
-        // Get Rule Info if linked
-        OPTIONAL MATCH (i)-[:FOLLOWS_RULE]->(r:Rule)<-[:DEFINES]-(s:Schedule)
+        // 3. RECURSIVE LOOKUP: Does this component match a Schedule?
+        // We look for a Schedule Rule that has a similar name to the Component
+        OPTIONAL MATCH (rule:Definition:Schedule)
+        WHERE rule.project = $project_id 
+          AND toLower(rule.name) CONTAINS toLower(c.name) // Simple string match for now
         
         RETURN 
-            i.type as Type,
-            i.label as Label,
-            i.location as Location,
-            i.dimension as Dimension,
-            d.key as Detail_Key,
-            collect({mat: m.name, rule: req.qty_rule}) as Detail_BOM,
-            r.specs as Rule_Specs,
-            s.name as Schedule_Name
+            node.id as ID,
+            node.title as Title,
+            collect({
+                material: c.name, 
+                qty_rule: r.qty_rule,
+                linked_schedule: rule.specs // <--- THIS IS THE MISSING LINK
+            }) as BOM,
+            score
         """
         with self.driver.session() as session:
-            result = session.run(query)
+            result = session.run(query, vector=vector, project_id=project_id, limit=limit)
             return [record.data() for record in result]
 
-# Singleton
 graph_db = ConstructionGraph()

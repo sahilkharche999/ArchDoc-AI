@@ -18,7 +18,7 @@ def detect_and_draw_boxes(img_path: str, output_path: str):
     results = model.predict(
         source=img_path,
         imgsz=1024,
-        conf=0.35,
+        conf=0.25,
         device="cpu"
     )
 

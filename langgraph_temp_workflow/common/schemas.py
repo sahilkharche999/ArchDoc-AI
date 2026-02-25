@@ -58,6 +58,9 @@ class DetailExtraction(BaseModel):
     materials: List[MaterialItem] = Field(description="List of ingredients")
     fabrication: FabricationMetrics = Field(description="Fabrication counts per detail instance")
 
+class DetailList(BaseModel):
+    details: List[DetailExtraction]
+    
 # Schema for Agent 2 (Plan Extraction)
 class PlanMember(BaseModel):
     label: str = Field(description="Text label e.g. W24x62")
@@ -93,13 +96,12 @@ class PlanExtraction(BaseModel):
 
 # Schema for Agent 4 (Final Merger)
 class BillOfMaterialItem(BaseModel):
-    category: Literal["W", "HSS", "C", "L", "FB", "ROD"] = Field(description="Material Category")
-    description: str = Field(description="Full description e.g. 'HSS 5x5x5/16 Column'")
-    
+    description: str = Field(description="Human readable description e.g. 'Beam at Grid A'")
+    material_size: str = Field(description="MUST match a value from the Valid Material List e.g. 'W24X62'")
     # The Core Metrics
-    total_qty: int = Field(description="Total count of pieces")
-    total_linear_feet: float = Field(description="Total length in feet (for pricing)")
-    total_weight_lbs: float = Field(description="Total weight (Length * Lbs/ft)")
+    total_linear_feet: float = Field(description="Total length in feet")
+    quantity: int = Field(description="Count of pieces")
+    
     
     # Fabrication Metrics
     total_bolts: int = Field(default=0)
@@ -122,4 +124,4 @@ class ScheduleRule(BaseModel):
 class TextRulesExtraction(BaseModel):
     rules: List[ScheduleRule]
     general_notes: List[str]
-    
+

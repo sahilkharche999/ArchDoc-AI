@@ -3,73 +3,69 @@ import json
 
 def prompt_for_node_classify_pages():
     prompt = """
-        Analyze this construction sheet and classify it into exactly ONE of these categories:
+    Analyze this construction sheet and classify it into exactly ONE of these categories:
 
-        - "text": If the page contains mostly Notes, Schedules, Tables, or Specifications.
-        - "floor": If the page shows a Plan View, Foundation Plan, or Roof Framing Plan.
-        - "section": If the page shows Detail Drawings, Wall Sections, or Connection Cuts.
+    - "text": If the page contains mostly Notes, Schedules, Tables, or Specifications.
+    - "floor": If the page shows a Plan View, Foundation Plan, or Roof Framing Plan.
+    - "section": If the page shows Detail Drawings, Wall Sections, or Connection Cuts.
 
-        Do NOT return a number. Return the category name.
-        """
+    **OUTPUT FORMAT:**
+    You must return a JSON object. Do not return just the word.
+    Example: {"drawing_type": "floor"}
+    """
     return prompt
 
-def prompt_for_node_process_details(title):
+def prompt_for_node_process_details():
     prompt = f"""
-    You are a Senior Structural Detailer creating a "Standard Definition Library" for a construction project.
-    You are analyzing the detail drawing titled "{title}".
+    You are a Senior Structural Detailer creating a "Standard Definition Library".
+    
+    ### INPUTS PROVIDED:
+    1. **Layout PDF:** Shows the full page structure.
+    2. **Cropped Images:** High-resolution zooms. Filenames are provided.
+    3. **Text JSON:** OCR text found on the page.
 
     ### YOUR GOAL
-    Create a **Recipe Card** for this detail. This recipe will be used later by an Estimator who finds this detail's symbol on a Floor Plan.
+    Visually group the inputs into distinct **"Detail Units"** and create a **Recipe Card** for each one.
 
+    ---
     ### MULTIMODAL CHAIN-OF-THOUGHT PROCESS:
 
-    **STEP 1: IDENTIFY THE SYMBOL (The Key)**
-    - Look for the Callout Bubble (Circle with a number).
-    - Extract the Detail Number (e.g., "7").
-    - Extract the Sheet Reference if visible (e.g., "S-3.2").
-    - *Reasoning:* "I see a bubble with '7' inside. This defines the symbol '7/S-3.2'."
+    **STEP 1: IDENTIFY & GROUP (The Trace)**
+    - Look at the Layout PDF. Find a Title.
+    - Find the Cropped Image that matches this Title.
+    - *Trace:* "I matched Title 'LADDER DETAIL' to Image 'crop_005.jpg' because it is located directly above the text."
 
-    **STEP 2: LIST THE INGREDIENTS (The BOM)**
-    - Read every leader line. List the materials required to build ONE instance of this detail.
-    - *Example:* "I see 'MC6x15.1' pointing to the side rails."
-    - *Example:* "I see 'L4x4x1/4' pointing to the base clips."
+    **STEP 2: EXTRACT INGREDIENTS (Verbatim)**
+    - Read the text on the leader lines.
+    - **CRITICAL RULE:** Extract the material name **EXACTLY AS WRITTEN** on the drawing.
+        - *Bad:* "Angle 4x4"
+        - *Good:* "L4x4x1/4"
+        - *Bad:* "3/4 inch Rod"
+        - *Good:* "3/4\" DIA. ROD"
+    - Do not expand abbreviations. Do not convert units.
 
-    **STEP 3: DEFINE THE QUANTITY LOGIC (The Rules)**
-    - For each ingredient, decide how the Estimator should count it when they see the symbol on the plan.
-    - **FIXED:** The quantity is constant per symbol.
-        - *Example:* "Base Clips". Every time you see symbol 7, you need exactly 2 clips.
-    - **VARIABLE:** The quantity depends on the geometry of the object on the plan.
-        - *Example:* "Side Rails". The length depends on how tall the ladder is (which is found on the plan/elevation, not here).
-        - *Example:* "Sill Plate". The length depends on how wide the window is.
+    **STEP 3: DEFINE LOGIC (Fixed vs Variable)**
+    - Decide if the item count is constant (Fixed) or depends on height/width (Variable).
 
-    **STEP 4: OUTPUT THE RECIPE**
-    - Format the data into the strict JSON schema below.
-
-    ### OUTPUT FORMAT (Pydantic Schema)
-    {{
-      "detail_number": "The number found in the bubble",
-      "title": "{title}",
-      "visual_reasoning": "I identified this as a Ladder Detail. It contains fixed clips and variable length rails.",
-      "materials": [
-        {{
-          "item_name": "MC6x15.1",
-          "material_type": "C",
-          "qty_rule": "VARIABLE: Height of Ladder",
-          "notes": "Side Rails (2 per ladder)"
-        }},
-        {{
-          "item_name": "L4x4x1/4",
-          "material_type": "L",
-          "qty_rule": "FIXED: 2",
-          "notes": "Base connection clips"
-        }}
-      ],
-      "fabrication": {{
-          "bolt_count": 2,
-          "hole_count": 4,
-          "weld_inches": 0
+    ---
+    ### OUTPUT FORMAT (JSON List)
+    [
+      {{
+        "detail_id": "7/S-3.2",
+        "title": "LADDER DETAIL",
+        "source_trace": "Matched Title at [x,y] to Image 'crop_005.jpg'",
+        "visual_reasoning": "I identified this as a Ladder. It contains fixed clips and variable rails.",
+        "materials": [
+          {{
+            "item_name": "L4x4x1/4x0'-3\"",  <-- EXACT TEXT FROM PDF
+            "material_type": "L",
+            "qty_rule": "FIXED: 2",
+            "notes": "Base connection clips"
+          }}
+        ],
+        "fabrication": {{ ... }}
       }}
-    }}
+    ]
     """
     return prompt
 

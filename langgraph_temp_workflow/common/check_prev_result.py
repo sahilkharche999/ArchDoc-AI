@@ -22,8 +22,8 @@ else:
     print("\n=== PREVIOUS RUN RESULTS ===")
     
     # Print the Final Bill of Materials
-    bom = snapshot.values.get("final_bill_of_materials", {})
+    bom = snapshot.values.get("detail_library", {})
     print(json.dumps(bom, indent=2))
     
-    # Optional: Check other data
-    # print(snapshot.values.get("detail_library", {}).keys())
+    
+ 
