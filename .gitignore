@@ -6,7 +6,6 @@ __pycache__
 *.jpg
 *.jpeg
 *.pdf
-*.txt
 output_temp
 assets
 *.xlsx

@@ -7,7 +7,7 @@ import pandas as pd
 import plotly.express as px
 import time
 
-from src.service import start_estimation
+from src.service import stream_estimation
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -23,62 +23,55 @@ if "ai_data" not in st.session_state:
     st.session_state.ai_data = None
 
 # --- AI EXECUTION FUNCTION ---
+
 def run_ai_estimation(uploaded_file):
 
     progress_bar = st.progress(0)
     status_text = st.empty()
 
-    steps = [
-        ("Agent 1: Classifying Pages & Extracting Text Rules...", 20),
-        ("Agent 2: Scanning Floor Plans & Identifying Symbols...", 45),
-        ("Agent 3: Cropping Section Details & Building Library...", 70),
-        ("Agent 4: Merging Logic & Calculating Linear Feet...", 90),
-    ]
+    os.makedirs("assets", exist_ok=True)
 
-    for text, percent in steps:
-        status_text.text(text)
-        time.sleep(0.8)
-        progress_bar.progress(percent)
+    file_path = f"assets/{uploaded_file.name}"
+
+    with open(file_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+
+    agent_result = None
+    step_count = 0
+    estimated_total_steps = 4  # adjust to match your real nodes
 
     try:
-       
-        os.makedirs("assets", exist_ok=True)
-        # Save uploaded file
-        file_path = f"assets/{uploaded_file.name}"
+        for thread_id, event in stream_estimation(file_path, "output_temp"):
 
-        with open(file_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
+            st.session_state.thread_id = thread_id
 
-        # 🔥 Call backend service (runs full workflow)
-        thread_id, agent_result = start_estimation(
-            pdf_path=file_path,
-            output_dir="output_temp"
-        )
+            for node_name, state_update in event.items():
 
-        st.session_state.thread_id = thread_id
+                step_count += 1
+                percent = int((step_count / estimated_total_steps) * 100)
+
+                status_text.text(f"Finished Agent {step_count}: {node_name}")
+                progress_bar.progress(min(percent, 95))
+
+                # Capture final result dynamically
+                if "final_bill_of_materials" in state_update:
+                    agent_result = state_update
+
+        progress_bar.progress(100)
+        status_text.text("Estimation Complete")
+
         if agent_result:
             st.session_state.ai_data = agent_result
         else:
-           st.error("No data returned from AI workflow.")
-           st.stop()
-
+            st.error("No final result returned from workflow.")
+            st.stop()
 
     except Exception as e:
-        st.error(f"Error running estimation: {e}")
+        st.error(f"Error during estimation: {e}")
         st.stop()
 
-    finally:
-        status_text.text("Finalizing Bill of Materials...")
-        progress_bar.progress(100)
-        time.sleep(0.5)
-
-        status_text.empty()
-        progress_bar.empty()
-
-        st.session_state.estimation_done = True
-        st.rerun()
-
-
+    st.session_state.estimation_done = True
+    st.rerun()
 
 # --- HEADER ---
 st.title("🏗️ DAX AI Structural Steel Estimator")
