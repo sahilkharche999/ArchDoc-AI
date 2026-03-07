@@ -320,5 +320,21 @@ def get_sheet_number(image_path: str) -> str:
     return extract_text_from_response(response)
 
 
+def normalize_material(name: str):
+    return name.replace(" ", "").upper()
 
 
+def load_material_weights(excel_path):
+
+    df = pd.read_excel(excel_path, sheet_name="Options")
+
+    weight_lookup = {}
+
+    for _, row in df.iterrows():
+
+        material = normalize_material(str(row["Material Size Description"]))
+        weight = float(row["Lbs/ft"])
+
+        weight_lookup[material] = weight
+
+    return weight_lookup

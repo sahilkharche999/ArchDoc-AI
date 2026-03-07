@@ -44,9 +44,12 @@ from src.utils.pdf_page_to_png import convert_specific_page_to_png
 
 from src.workflow.common.utils import load_image_base64
 from src.workflow.common.utils import get_sheet_number
+from src.workflow.common.utils import load_material_weights
+from src.workflow.common.utils import normalize_material
 
 # here import the logger file 
 from src.workflow.common.logger import setup_logger
+from src.db.jobs_db import update_job_status
 
 logger = setup_logger(__name__)
 load_dotenv()
@@ -411,7 +414,7 @@ def node_process_details(state: ProjectState):
 
     return {"detail_library": detail_library}
 
-def node_agent_4_merger(state: ProjectState):
+def node_agent_4_merger(state: ProjectState,config):
     """
     Merges vision-derived symbols with graph data to drive the final estimation step.
 
@@ -443,15 +446,17 @@ def node_agent_4_merger(state: ProjectState):
     floor_images = state.get("floor_plan_images", [])
     
     # Load Excel Options
-    excel_path = "#1A Steel Estimator (2023) (1).xlsx"
+    excel_path = "#1A Steel Estimator (2023).xlsx"
     valid_materials = get_valid_materials_list(excel_path)
+    weight_lookup = load_material_weights(excel_path)
     valid_materials_str = json.dumps(valid_materials)
 
     if not floor_images:
         return {"final_bill_of_materials": {"error": "No floor plans found."}}
 
     all_extracted_items = []
-
+    job_id = config["configurable"]["thread_id"]
+    failed=False
     for img_path in floor_images:
         if not os.path.exists(img_path): continue
         
@@ -523,9 +528,23 @@ def node_agent_4_merger(state: ProjectState):
             
             if result.final_bill_of_materials:
                 logger.info(f"    > Extracted {len(result.final_bill_of_materials)} items.")
+                for item in result.final_bill_of_materials:
+                    material = normalize_material(item.material_size)
+                    lb_per_ft = weight_lookup.get(material, 0)
+                    item.lb_per_ft = lb_per_ft
+                    item.total_weight_lbs = (
+                        item.total_linear_feet * lb_per_ft
+                    )
                 all_extracted_items.extend(result.final_bill_of_materials)
-                
+                  
         except Exception as e:
-            logger.error(f"    ! Estimation failed for {filename}: {e}")
+            logger.error(f"Agent 4 failed: {e}")
+            
+            failed=True
+    if failed :
+        update_job_status(job_id, "Failed")
+    else:
+        update_job_status(job_id, "Completed")
+        
     return {"final_bill_of_materials": {"final_bill_of_materials": [item.model_dump() for item in all_extracted_items]}}   
 

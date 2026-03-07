@@ -100,7 +100,8 @@ class BillOfMaterialItem(BaseModel):
     total_bolts: int = Field(default=0)
     total_holes: int = Field(default=0)
     total_weld_inches: float = Field(default=0.0)
-    
+    lb_per_ft: float | None = None
+    total_weight_lbs: float | None = None
     # The "Why" (CoT)
     logic_trace: str = Field(description="Explanation of the calculation. E.g. 'Found 5 cols. Height 18ft from Roof Note. 5*18=90ft.'")
 

@@ -13,10 +13,12 @@ memory = SqliteSaver(conn)
 # 2. Compile (Required to read the structure)
 app = workflow.compile(checkpointer=memory)
 
-# 3. Use the SAME Thread ID you used before
-config = {"configurable": {"thread_id": "job_123"}}
 
-# 4. Get the State directly (No API calls!)   
+# 3. Use the SAME Thread ID you used before. 
+
+config = {"configurable": {"thread_id": "08a44161-088e-414d-9a33-283ee14a57c2"}}
+
+# 4. Get the State directly (No API calls!)  
 snapshot = app.get_state(config)
 
 if not snapshot.values:
@@ -24,7 +26,8 @@ if not snapshot.values:
 else:
     logger.info("\n=== PREVIOUS RUN RESULTS ===")
     
-    # Print the Final Bill of Materials 
-    bom = snapshot.values.get("detail_library", {})
+    # Print the Final Bill of Materials   
+    bom = snapshot.values.get("final_bill_of_materials", {})
     logger.info(json.dumps(bom, indent=2))
         
+
