@@ -413,7 +413,7 @@ def node_process_details(state: ProjectState):
                     )
 
     return {"detail_library": detail_library}
-
+# ---  AGENT 5: DETAIL PROCESSOR ---
 def node_agent_4_merger(state: ProjectState,config):
     """
     Merges vision-derived symbols with graph data to drive the final estimation step.
@@ -448,7 +448,7 @@ def node_agent_4_merger(state: ProjectState,config):
     # Load Excel Options
     excel_path = "#1A Steel Estimator (2023).xlsx"
     valid_materials = get_valid_materials_list(excel_path)
-    weight_lookup = load_material_weights(excel_path)
+    material_lookup = load_material_weights(excel_path)
     valid_materials_str = json.dumps(valid_materials)
 
     if not floor_images:
@@ -528,13 +528,6 @@ def node_agent_4_merger(state: ProjectState,config):
             
             if result.final_bill_of_materials:
                 logger.info(f"    > Extracted {len(result.final_bill_of_materials)} items.")
-                for item in result.final_bill_of_materials:
-                    material = normalize_material(item.material_size)
-                    lb_per_ft = weight_lookup.get(material, 0)
-                    item.lb_per_ft = lb_per_ft
-                    item.total_weight_lbs = (
-                        item.total_linear_feet * lb_per_ft
-                    )
                 all_extracted_items.extend(result.final_bill_of_materials)
                   
         except Exception as e:
@@ -545,6 +538,6 @@ def node_agent_4_merger(state: ProjectState,config):
         update_job_status(job_id, "Failed")
     else:
         update_job_status(job_id, "Completed")
-        
+
     return {"final_bill_of_materials": {"final_bill_of_materials": [item.model_dump() for item in all_extracted_items]}}   
 

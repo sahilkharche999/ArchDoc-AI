@@ -328,13 +328,17 @@ def load_material_weights(excel_path):
 
     df = pd.read_excel(excel_path, sheet_name="Options")
 
-    weight_lookup = {}
+    material_lookup = {}
 
     for _, row in df.iterrows():
 
         material = normalize_material(str(row["Material Size Description"]))
         weight = float(row["Lbs/ft"])
+        price = float(row["$ Charge per lb"]) 
 
-        weight_lookup[material] = weight
+        material_lookup[material] = {
+            "lb_per_ft": weight,
+            "price_per_lb": price
+        }
 
-    return weight_lookup
+    return material_lookup

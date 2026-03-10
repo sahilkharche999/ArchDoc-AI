@@ -16,7 +16,7 @@ app = workflow.compile(checkpointer=memory)
 
 # 3. Use the SAME Thread ID you used before. 
 
-config = {"configurable": {"thread_id": "08a44161-088e-414d-9a33-283ee14a57c2"}}
+config = {"configurable": {"thread_id": "a4806f22-c615-4367-aadd-94e69c5af2ec"}}
 
 # 4. Get the State directly (No API calls!)  
 snapshot = app.get_state(config)
@@ -29,5 +29,4 @@ else:
     # Print the Final Bill of Materials   
     bom = snapshot.values.get("final_bill_of_materials", {})
     logger.info(json.dumps(bom, indent=2))
-        
-
+ 
