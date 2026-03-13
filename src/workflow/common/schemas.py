@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import  Literal, List, Optional, Dict, Any
 
-# ---SEMENTIC SEGMENTATION SCHEMAS START---
+
 class Region(BaseModel):
     id: int = Field(description="Unique identifier")
     label: str = Field(description="Description (e.g., 'Main Floor Plan', 'Door Schedule')")
@@ -95,7 +95,6 @@ class BillOfMaterialItem(BaseModel):
     total_linear_feet: float = Field(description="Total length in feet")
     quantity: int = Field(description="Count of pieces")
     
-    
     # Fabrication Metrics
     total_bolts: int = Field(default=0)
     total_holes: int = Field(default=0)
@@ -105,7 +104,8 @@ class BillOfMaterialItem(BaseModel):
     charge_per_lb:float | None = None
     # The "Why" (CoT)
     logic_trace: str = Field(description="Explanation of the calculation. E.g. 'Found 5 cols. Height 18ft from Roof Note. 5*18=90ft.'")
-
+    source_drawing: str
+    
 class FinalEstimation(BaseModel):
     project_summary: str = Field(description="High-level summary of what was estimated")
     final_bill_of_materials: List[BillOfMaterialItem]
@@ -120,3 +120,18 @@ class TextRulesExtraction(BaseModel):
     rules: List[ScheduleRule]
     general_notes: List[str]
 
+
+class IngestionOutput(BaseModel):
+    type: Literal["Schedule","Keyed_Notes","Plan_View","Ignore"]
+    title: Optional[str]
+    columns: Optional[List[str]]
+    rows: Optional[List[Dict[str,str]]]
+
+class DetailGroup(BaseModel):
+    detail_id: str = Field(description="The unique ID e.g. '7/S-3.2'")
+    title: str = Field(description="The title text e.g. 'LADDER DETAIL'")
+    image_files: List[str] = Field(description="List of image filenames belonging to this detail")
+    text_blocks: List[str] = Field(description="List of text content belonging to this detail")
+
+class DetailMap(BaseModel):
+    groups: List[DetailGroup]

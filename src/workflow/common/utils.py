@@ -1,47 +1,37 @@
 import os
 import json
+import fitz
 import base64
 from io import BytesIO
-from src.workflow.common.schemas import DetailExtraction
-from langchain_google_genai import ChatGoogleGenerativeAI
-from dotenv import load_dotenv
-from pdf2image import convert_from_path
-import pdfplumber
-from PIL import Image
-from langchain_core.messages import HumanMessage
-from pydantic import BaseModel, Field
-from google import genai
+import subprocess
+
 import pandas as pd
-from typing import List
-from src.workflow.common.logger import setup_logger
+from PIL import Image
+from pdf2image import convert_from_path
+from dotenv import load_dotenv
+from google import genai
+
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import HumanMessage
+
+from src.workflow.common.schemas import DetailExtraction,DetailGroup,DetailMap
+from src.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-load_dotenv()
 
-# --- 1. SETUP MODELS ---
+load_dotenv()
 llm_pro = ChatGoogleGenerativeAI(model="gemini-3-pro-preview") 
 llm_flash = ChatGoogleGenerativeAI(model="gemini-2.5-flash") 
 client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
-MODEL = "gemini-2.5-flash" 
 
 
 
-
-class DetailGroup(BaseModel):
-    detail_id: str = Field(description="The unique ID e.g. '7/S-3.2'")
-    title: str = Field(description="The title text e.g. 'LADDER DETAIL'")
-    image_files: List[str] = Field(description="List of image filenames belonging to this detail")
-    text_blocks: List[str] = Field(description="List of text content belonging to this detail")
-
-class DetailMap(BaseModel):
-    groups: List[DetailGroup]
-
-# --- STEP 1: THE MAPPER ---
 def map_page_layout(pdf_layout_path: str, json_path: str, images_dir: str):
     """
     Uses VLM to look at the full page layout and group items into 'Detail Units'.
     Returns a list of DetailGroup objects.
+    Used in Process Plan agent
     """
     logger.info(f"   > Mapping Layout for {pdf_layout_path}...")
     
@@ -90,16 +80,16 @@ def map_page_layout(pdf_layout_path: str, json_path: str, images_dir: str):
     try:
         # Use Flash for layout mapping (it's fast and good at spatial grouping)
         result = llm_flash.with_structured_output(DetailMap).invoke([msg])
-        logger.info(f"This is how the group looks like : {result.groups}")
         return result.groups
     except Exception as e:
         logger.error(f"   ! Mapping failed: {e}")
         return []
 
-# --- STEP 2: THE EXTRACTOR ---
+
 def extract_single_detail(group: DetailGroup, images_dir: str):
     """
     Analyzes a SINGLE detail group (specific images + text) to get the BOM.
+    Used in the Floor plan agent 
     """
     logger.info(f"   > Extracting BOM for {group.detail_id}...")
     
@@ -147,7 +137,10 @@ def extract_single_detail(group: DetailGroup, images_dir: str):
 
 
 def crop_union_tables(json_path, image_path, output_dir="debug_crops"):
-    
+    """
+    Used in the agnet 2 floor plan , where it task is to combine the text+image co-ordiante and crop combine table,
+    which make sure healing and content comes in crop
+    """
     os.makedirs(output_dir, exist_ok=True)
     
     if not os.path.exists(image_path):
@@ -283,8 +276,46 @@ def crop_union_tables(json_path, image_path, output_dir="debug_crops"):
             # This handles tables that MinerU found perfectly without a separate title
             pass 
 
+def convert_specific_page_to_png(pdf_path,page_num,output_image_path,dpi=300):
+    try:
+        #open the pdf into one container
+        doc=fitz.open(pdf_path)
+        if 0<=page_num<doc.page_count:
+            page=doc.load_page(page_num)
+            pix=page.get_pixmap(dpi=dpi)
+            pix.save(output_image_path)
+            logger.info(f"Successfully converted page {page_num } to {output_image_path}")
+        else:
+            logger.error(f"Error: Page number {page_num } is out of range.")
+        doc.close()
+    except Exception as e:
+        logger.error(f"An error occurred: {e}")
 
+
+
+
+def minerU_pdf_creating_extration(pdf_path:str,output_dir:str,backend_type:str):
+    os.makedirs(output_dir, exist_ok=True)
+    cmd = [
+        "mineru",
+
+        "--path", pdf_path,
+        "--output", output_dir,
+        "--backend", "pipeline",
+        "--method", "auto",
+        "--lang", "en",
+        "--table", "true",
+        "--formula", "false",
+        "--backend",backend_type
+    ]
+
+    subprocess.run(cmd, check=True)
+    
+    
 def get_valid_materials_list(excel_path):
+    """
+    Load the Excel sheet and return the last 'Option' tab which content the material size + linear feet + cost
+    """
     try:
         df = pd.read_excel(excel_path, sheet_name="Options")
         return df.iloc[:, 0].dropna().astype(str).tolist()
@@ -300,12 +331,17 @@ def image_to_base64(image_obj):
     image_obj.save(buff, format="PNG")
     return base64.b64encode(buff.getvalue()).decode("utf-8")
 
+
 def extract_text_from_response(response):
+    """Used in the get sheet number function and task is to retunr json strucutred"""
     if isinstance(response.content, list):
         return "".join([part["text"] for part in response.content if "text" in part]).strip()
     return str(response.content).strip()
 
 def get_sheet_number(image_path: str) -> str:
+    """
+    Get the sheet number present in the bottom right corner,used in storing the section detail information
+    """
     image_b64 = load_image_base64(image_path)
     prompt = """
     Look at the BOTTOM RIGHT CORNER. Extract the SHEET NUMBER.
@@ -319,10 +355,8 @@ def get_sheet_number(image_path: str) -> str:
     response = llm_pro.invoke([msg])
     return extract_text_from_response(response)
 
-
 def normalize_material(name: str):
     return name.replace(" ", "").upper()
-
 
 def load_material_weights(excel_path):
 
@@ -342,3 +376,25 @@ def load_material_weights(excel_path):
         }
 
     return material_lookup
+
+
+def enrich_bom_with_pricing(bom_items, material_lookup):
+
+    for item in bom_items:
+
+        material = normalize_material(item["material_size"])
+
+        material_data = material_lookup.get(material, {})
+
+        lb_per_ft = material_data.get("lb_per_ft", item.get("lb_per_ft", 0))
+        price = material_data.get("price_per_lb", 0)
+
+        item["lb_per_ft"] = lb_per_ft
+
+        item["total_weight_lbs"] = item["total_linear_feet"] * lb_per_ft * item.get("quantity", 1)
+
+        item["charge_per_lb"] = price
+
+        item["total_cost"] = item["total_weight_lbs"] * price
+
+    return bom_items

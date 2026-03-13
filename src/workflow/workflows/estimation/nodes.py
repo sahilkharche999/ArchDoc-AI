@@ -1,55 +1,43 @@
 import os
 import json
-import pandas as pd
-from google.genai import types
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
-from typing import  Literal, List, Optional
-
-# LangChain / LangGraph Imports
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
-
-# PDF & Image Processing Imports
 import pdfplumber
 from pypdf import PdfReader, PdfWriter
-
-# import state from the common/state file 
 from src.workflow.common.state import ProjectState
+from src.workflow.common.schemas import (
+    DrawingTypeResponse,
+    FinalEstimation,
+    TextRulesExtraction,
+    IngestionOutput 
+    )
+from src.workflow.workflows.estimation.prompt import (
+    prompt_for_node_classify_pages,
+    prompt_for_node_process_plans,
+    prompt_node_process_text_rules,
+    prompt_for_agent_4_merger
+    )
+from src.workflow.common.utils import (
+    crop_union_tables,
+    map_page_layout,
+    extract_single_detail,
+    get_valid_materials_list,
+    load_image_base64,
+    get_sheet_number,
+    convert_specific_page_to_png,
+    load_material_weights,              
+    minerU_pdf_creating_extration                
+    )
+from src.workflow.tools.graph_tools import (
+    lookup_symbol_definition,
+    submit_final_estimate
+    )
 
-# import schema from the common/schema file 
-from src.workflow.common.schemas import DrawingTypeResponse 
-from src.workflow.common.schemas import FinalEstimation 
-from src.workflow.common.schemas import TextRulesExtraction 
-
-#import the prompt 
-from src.workflow.workflows.estimation.prompt import prompt_for_node_classify_pages
-from src.workflow.workflows.estimation.prompt import prompt_for_node_process_plans
-from src.workflow.workflows.estimation.prompt import prompt_node_process_text_rules
-from src.workflow.workflows.estimation.prompt import prompt_for_agent_4_merger
-
-# import the utils  function 
-from src.utils.minerU_pdf_reading import minerU_pdf_creating_extration
-from src.workflow.common.utils import crop_union_tables
-from src.workflow.common.utils import map_page_layout, extract_single_detail,get_valid_materials_list
-
-# import tools
-from src.workflow.tools.graph_tools import lookup_symbol_definition 
-from src.workflow.tools.graph_tools import submit_final_estimate
-
-# import graph DB here
-from src.utils.graph_db import graph_db
-from src.utils.symbol_detection import detect_and_read_symbols 
-from src.utils.pdf_page_to_png import convert_specific_page_to_png
-
-from src.workflow.common.utils import load_image_base64
-from src.workflow.common.utils import get_sheet_number
-from src.workflow.common.utils import load_material_weights
-from src.workflow.common.utils import normalize_material
-
-# here import the logger file 
-from src.workflow.common.logger import setup_logger
-from src.db.jobs_db import update_job_status
+from src.infrastructure.graph_db import graph_db
+from src.infrastructure.symbol_detection import detect_and_read_symbols 
+from src.logger import setup_logger
+from src.db.update_jobs_status import update_job_status
 
 logger = setup_logger(__name__)
 load_dotenv()
@@ -59,7 +47,7 @@ llm_25_pro = ChatGoogleGenerativeAI(model="gemini-2.5-pro")
 llm_flash = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite") 
 
 
-# ---  AGENT 1: PAGE CLASSIFY ---
+# ---  AGENT 0: PAGE CLASSIFY ---
 def node_classify_pages(state: ProjectState):
     """
     Classifies pages in a PDF document by converting them to images and analyzing their content.
@@ -75,6 +63,8 @@ def node_classify_pages(state: ProjectState):
     """
     logger.info("--- NODE 1 : Classifying Pages ---")
     pdf_path = state["pdf_path"]
+    output_dir=state['output_dir']
+    os.makedirs(output_dir, exist_ok=True)
     page_map = {}
     
     with pdfplumber.open(pdf_path) as pdf:
@@ -99,7 +89,7 @@ def node_classify_pages(state: ProjectState):
     return {"page_map": page_map}
 
 
-# ---  AGENT 2: TEXT PROCESSOR ---
+# ---  AGENT 1: TEXT PROCESSOR ---
 def node_process_text_rules(state: ProjectState):
     """
     Extracts text content and schedule rules from text pages using minerU.
@@ -133,7 +123,7 @@ def node_process_text_rules(state: ProjectState):
             writer.add_page(reader.pages[page_num])
             with open(page_pdf_path, "wb") as f: writer.write(f)
         except Exception as e:
-            print(f"PDF extraction failed: {e}")
+            logger.error(f"PDF extraction failed: {e}")
             continue
 
         # 2. Run MinerU (Assuming this function works and saves to the path below)
@@ -148,7 +138,7 @@ def node_process_text_rules(state: ProjectState):
             with open(md_file_path, "r", encoding="utf-8") as f:
                 markdown_content = f.read()
         except FileNotFoundError:
-            print(f"   ! Markdown file not found: {md_file_path}")
+            logger.error(f"   ! Markdown file not found: {md_file_path}")
             continue
 
         # 4. The Advanced Prompt
@@ -182,7 +172,7 @@ def node_process_text_rules(state: ProjectState):
                 
     return {"general_rules": state["general_rules"]}
 
-# ---  AGENT 3: PROCESS PLAN ---
+# ---  AGENT 2: PROCESS PLAN ---
 def node_process_plans(state: ProjectState):
     """
     Processes floor plan pages using minerU-VLM to extract schedules and identify floor plans.
@@ -221,7 +211,7 @@ def node_process_plans(state: ProjectState):
         page_dir = f"{state['output_dir']}/floor_{page_num}"
         page_img_path = f"{page_dir}.png"
         page_pdf_path = f"{page_dir}.pdf"
-        
+
         mineru_output_dir = f"{state['output_dir']}/floor_{page_num}"
         mineru_vlm_dir = f"{mineru_output_dir}/floor_{page_num}/vlm" # Adjust based on actual MinerU output structure
         json_path = f"{mineru_vlm_dir}/floor_{page_num}_content_list_v2.json"
@@ -229,6 +219,8 @@ def node_process_plans(state: ProjectState):
 
         # 2. Prepare Page Image & PDF
         convert_specific_page_to_png(state["pdf_path"], page_num, page_img_path, dpi=300)
+
+        sheet_number = get_sheet_number(page_img_path)
         
         try:
             reader = PdfReader(state["pdf_path"])
@@ -236,7 +228,7 @@ def node_process_plans(state: ProjectState):
             writer.add_page(reader.pages[page_num])
             with open(page_pdf_path, "wb") as f: writer.write(f)
         except Exception as e:
-            print(f"PDF extraction failed: {e}")
+            logger.error(f"PDF extraction failed: {e}")
             continue
 
         # 3. Run MinerU (VLM Backend)
@@ -267,47 +259,49 @@ def node_process_plans(state: ProjectState):
                 ])
                 
                 try:
-                    # Use a simple schema for ingestion
-                    class ScheduleItem(BaseModel):
-                        key_id: str
-                        raw_label: Optional[str] = ""
-                        specs: Optional[str] = "" # Make this optional
-
-                    class IngestionOutput(BaseModel):
-                        content_type: Literal["Schedule", "Keyed_Notes", "Plan_View", "Ignore"] = Field(alias="type")
-                        title: Optional[str]
-                        items: List[ScheduleItem] # Use the class, not Dict
                     result = llm_flash.with_structured_output(IngestionOutput).invoke([msg])
                     
                     # CASE A: It is a Schedule/Note -> Store in Graph
-                    if result.content_type in ["Schedule", "Keyed_Notes"]:
+                    if result.type == "Schedule":
                         logger.info(f"     > Ingested Schedule: {result.title}")
-                        logger.info(f"     > Found {len(result.items)} items.")
-                        for entry_obj in result.items:
-                            entry = entry_obj.model_dump()
-                            key = entry.get("key_id") or entry.get("key") or "UNKNOWN"
-                            val = entry.get("specs") or entry.get("value")
-                            if not val:
-                                # Fallback: Dump the whole dict excluding the key
-                                val = str({k:v for k,v in entry.items() if k not in ["key_id", "key"]})
+                        rows = result.rows or []
+                        logger.info(f" > Found {len(rows)} rows.")
+                        logger.info(f"     > Found {len(result.rows)} rows.")
 
-                            if key == "UNKNOWN":
-                                logger.warning(f"     ! Warning: VLM returned UNKNOWN key for item: {entry}")
+                        columns = result.columns or []
 
-                            
+                        for row in rows:
+                            # row is already a dictionary
+                            row_data = row
+
+                            # Determine primary key (usually first column)
+                            primary_key = None
+                            if columns:
+                                primary_key = row_data.get(columns[0])
+
+                            if not primary_key:
+                                primary_key = row_data.get("MARK") or row_data.get("KEY") or "UNKNOWN"
+
+                            if primary_key == "UNKNOWN":
+                                logger.warning(f"     ! Could not determine primary key for row: {row_data}")
+
                             graph_db.add_schedule_rule(
                                 project_id=os.path.basename(state["pdf_path"]),
                                 schedule_name=result.title,
-                                symbol=key,
-                                specs=val,
-                                page_num=page_num
+                                symbol=primary_key,
+                                row_data=row_data,
+                                columns=columns,
+                                page_num=page_num,
+                                sheet_number=sheet_number
                             )
 
                     # CASE B: It is a Plan View -> Save for Agent 5
-                    elif result.content_type == "Plan_View":
+                    elif result.type == "Plan_View":
                         logger.info(f"     > Found Floor Plan Crop: {img_file}")
-                        floor_plan_images.append(crop_path)
-
+                        floor_plan_images.append({
+                            "path": crop_path,
+                            "sheet": sheet_number
+                        })
                 except Exception as e:
                     logger.error(f"     ! Failed to ingest {img_file}: {e}")
                     
@@ -316,7 +310,7 @@ def node_process_plans(state: ProjectState):
         "general_rules": "Updated Graph with Schedules"
     }
 
-# ---  AGENT 4: DETAIL PROCESSOR ---
+# ---  AGENT 3: DETAIL PROCESSOR ---
 def node_process_details(state: ProjectState):
     """
     Extracts and processes section detail drawings using minerU to build a detail
@@ -381,40 +375,49 @@ def node_process_details(state: ProjectState):
         images_dir = f"{mineru_base_dir}/images"
 
         logger.info("   > Step 1: Mapping Layout...")
+        if not os.path.exists(layout_pdf_path) or not os.path.exists(json_path):
+            logger.warning(
+    f"MinerU output missing for page {page_num}. "
+    f"layout={layout_pdf_path}, json={json_path}"
+)
+            continue
         detail_groups = map_page_layout(layout_pdf_path, json_path, images_dir)
 
         if not detail_groups:
             logger.warning("   ! No details found on page.")
             continue
 
-        if not os.path.exists(layout_pdf_path) or not os.path.exists(json_path):
-            logger.warning(f"   ! MinerU output missing for page {page_num}. Skipping.")
-            continue
    
         logger.info(f"   > Step 2: Extracting {len(detail_groups)} details...") 
         
         for group in detail_groups:
                 # Call the extractor for this specific group
+                logger.info(f" > Extracting detail: {group.detail_id}")
                 detail_data = extract_single_detail(group, images_dir)
                 
                 if detail_data:
                     # Construct Key (Clean logic)
-                    key = group.detail_id # The Mapper already extracted "7/S-3.2"
-                    
-                    # Store
-                    detail_library[key] = detail_data.model_dump()
+                    key = f"{group.detail_id}/{sheet_number}" if "/" not in group.detail_id else group.detail_id
+                    detail_library[key] = {
+                    "sheet": sheet_number,
+                    "page": page_num,
+                    "data": detail_data.model_dump()
+                    }
                     
                     graph_db.add_detail_bom(
                         project_id=os.path.basename(state["pdf_path"]),
                         detail_key=key, 
                         title=detail_data.title, 
                         materials_list=detail_data.model_dump()["materials"], 
-                        page_num=page_num
+                        page_num=page_num,
+                        sheet_number=sheet_number
                     )
 
     return {"detail_library": detail_library}
-# ---  AGENT 5: DETAIL PROCESSOR ---
-def node_agent_4_merger(state: ProjectState,config):
+
+
+# ---  AGENT 4: DETAIL PROCESSOR --- 
+def node_agent_4_merger(state: ProjectState,config):   
     """
     Merges vision-derived symbols with graph data to drive the final estimation step.
 
@@ -457,7 +460,9 @@ def node_agent_4_merger(state: ProjectState,config):
     all_extracted_items = []
     job_id = config["configurable"]["thread_id"]
     failed=False
-    for img_path in floor_images:
+    for img in floor_images:
+        img_path = img["path"]
+        sheet_number = img["sheet"]
         if not os.path.exists(img_path): continue
         
         filename = os.path.basename(img_path)
@@ -467,6 +472,7 @@ def node_agent_4_merger(state: ProjectState,config):
         symbol_out_dir = os.path.join(os.path.dirname(img_path), "detected_symbols")
         try:
             raw_symbols = detect_and_read_symbols(img_path, symbol_out_dir)
+            raw_symbols = [s for s in raw_symbols if s.get("text_content") != "Unknown"]
             logger.info(f"Here is the Raw symbol we detectd : {raw_symbols}")
         except Exception as e:
             logger.error(f"    ! Symbol detection failed: {e}")
@@ -476,10 +482,10 @@ def node_agent_4_merger(state: ProjectState,config):
     
         enriched_symbols = []
         for sym in raw_symbols:
-            query_text = f"{sym['type']} {sym['content']}" 
+            query_text = f"{sym.get('shape','')} {sym.get('text_content','')}"
             
             # A. Primary Lookup (Symbol -> Detail/Rule)
-            matches = graph_db.semantic_search(query_text, project_id, limit=1)
+            matches = graph_db.semantic_search(query_text, project_id,sheet_number=sheet_number,limit=1)
             
             definition = None
             
@@ -490,23 +496,29 @@ def node_agent_4_merger(state: ProjectState,config):
                 if definition.get("BOM"):
                     for item in definition["BOM"]:
                         # Check for "Schedule" or "See Plan" in rule/material
-                        rule_text = item.get("rule", "") or ""
+                        rule_text = item.get("qty_rule", "")
                         mat_text = item.get("material", "") or ""
-                        
-                        if "Schedule" in rule_text or "Schedule" in mat_text:
+                        schedule_keywords = ["schedule", "see plan", "see sched", "per schedule"]
+                        text_blob = f"{rule_text} {mat_text}".lower()
+                        if any(k in text_blob for k in schedule_keywords):
                             logger.info(f"    > Resolving Reference: {mat_text}")
                             
                             # Search for the Schedule (Filter by Label="Schedule" if possible)
                             # Using the material name as the query (e.g. "LOOSE LINTEL")
-                            sub_matches = graph_db.semantic_search(mat_text, project_id, limit=1)
+                            sub_matches = graph_db.semantic_search(mat_text, project_id,sheet_number=sheet_number, limit=1)
                             
                             if sub_matches:
-                                # Attach the schedule data to this specific BOM item
+                                schedule_obj = sub_matches[0]
+
                                 item["linked_schedule_data"] = {
-                                    "id": sub_matches[0]['ID'],
-                                    "specs": sub_matches[0]['Specs'] # The rules!
+                                    "schedule_id": schedule_obj.get("ID"),
+                                    "schedule_name": schedule_obj.get("Name"),
+                                    "columns": schedule_obj.get("Columns"),
+                                    "rows": schedule_obj.get("Rows"),
+                                    "sheet": schedule_obj.get("Sheet")
                                 }
-                                logger.info(f"      -> Found: {sub_matches[0]['ID']}")
+
+                                logger.info(f"      -> Found schedule: {schedule_obj.get('ID')}")
 
             # Attach the fully enriched definition to the symbol
             sym['linked_definition'] = definition
@@ -514,7 +526,7 @@ def node_agent_4_merger(state: ProjectState,config):
         logger.info(f"    > Enriched {len(enriched_symbols)} symbols with Graph Data.")
 
         # 3. ONE-SHOT PROMPT (No ReAct Loop needed anymore!
-        system_prompt =prompt_for_agent_4_merger(json.dumps(enriched_symbols, indent=2),valid_materials_str)
+        system_prompt =prompt_for_agent_4_merger(json.dumps(enriched_symbols, indent=2),valid_materials_str,sheet_number)
 
         # 4. Call LLM (Standard Invoke)
         b64 = load_image_base64(img_path)

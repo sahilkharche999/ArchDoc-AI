@@ -10,20 +10,61 @@ from groq import Groq
 from pydantic import BaseModel
 from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
 
+from src.logger import setup_logger
+
+logger = setup_logger(__name__)
 load_dotenv()
 
-# --- CONFIG ---
-# Load models once to save time
+
 DINO_MODEL_ID = "IDEA-Research/grounding-dino-base"
 processor = AutoProcessor.from_pretrained(DINO_MODEL_ID)
 model = AutoModelForZeroShotObjectDetection.from_pretrained(DINO_MODEL_ID)
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+model.to(DEVICE)
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+SYMBOL_OCR_PROMPT = """
+You are reading a structural drawing symbol.
+
+There are only two valid outputs:
+
+1) If this is a HEXAGON containing a number N:
+return exactly: hex-N
+
+2) If this is a DETAIL CALLOUT (circle over triangle)
+containing:
+- Top: a number (e.g., 3)
+- Bottom: a sheet reference (e.g., S-3.2)
+
+return exactly: NUMBER/SHEET
+
+Examples:
+hex-1
+3/S-3.2
+4/S-4.0
+
+Rules:
+- NO spaces
+- NO newline
+- NO explanation
+- NO markdown
+- Output only the final formatted value
+- Valid outputs ONLY:
+    hex-N
+    NUMBER/SHEET
+    Unknown
+
+    Examples:
+    hex-1
+    3/S-3.2
+    4/S-4.0
+    Unknown
+"""
 
 
 class SymbolData(BaseModel):
     shape: str
     text_content: str
-    bbox: List[int]  # [x1, y1, x2, y2]
+    bbox: List[int] 
 
 
 def image_to_base64(pil_image):
@@ -39,13 +80,21 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
     2. Crops them.
     3. Uses Groq (Llama Vision) to read the text inside.
     """
-    print(f"  > Running Symbol Detection on {os.path.basename(image_path)}...")
-
-    image = Image.open(image_path).convert("RGB")
+    logger.info(f"  > Running Symbol Detection on {os.path.basename(image_path)}...")
+    with Image.open(image_path) as img:
+         image = img.convert("RGB")
 
     # 1. DINO Detection
-    text_prompt = "hexagon. circle. triangle."  # Add shapes relevant to your plans
-    inputs = processor(images=image, text=text_prompt, return_tensors="pt")
+    text_prompt = """
+    hexagon. circle. triangle.
+    detail reference bubble.
+    section reference bubble.
+    drawing callout bubble.
+
+    """
+
+
+    inputs = processor(images=image, text=text_prompt, return_tensors="pt").to(DEVICE)
 
     with torch.no_grad():
         outputs = model(**inputs)
@@ -53,7 +102,7 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
     results = processor.post_process_grounded_object_detection(
         outputs,
         inputs.input_ids,
-        threshold=0.19,  # Adjust based on sensitivity needs
+        threshold=0.19, 
         text_threshold=0.10,
         target_sizes=[image.size[::-1]]
     )[0]
@@ -63,7 +112,7 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
 
     # 2. Process Detections
     for i, (score, label, box) in enumerate(zip(results["scores"], results["labels"], results["boxes"])):
-        if score.item() < 0.30: continue
+        if score.item() < 0.20: continue
 
         # Get Coords
         x1, y1, x2, y2 = map(int, box.tolist())
@@ -88,34 +137,7 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
                                         "content": [
                                             {
                                                 "type": "text",
-                                                "text": """
-                You are reading a structural drawing symbol.
-                
-                There are only two valid outputs:
-                
-                1) If this is a HEXAGON containing a number N:
-                   return exactly: hex-N
-                
-                2) If this is a DETAIL CALLOUT (circle over triangle)
-                   containing:
-                   - Top: a number (e.g., 3)
-                   - Bottom: a sheet reference (e.g., S-3.2)
-                
-                   return exactly: NUMBER/SHEET
-                
-                Examples:
-                hex-1
-                3/S-3.2
-                4/S-4.0
-                
-                Rules:
-                - NO spaces
-                - NO newline
-                - NO explanation
-                - NO markdown
-                - Output only the final formatted value
-                - If unreadable return: Unknown
-                """
+                                                "text": SYMBOL_OCR_PROMPT
                                             },
                                             {
                                                 "type": "image_url",
@@ -131,27 +153,17 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
             )
             content_text = chat_completion.choices[0].message.content.strip()
 
-            # Store Result
-            symbol_data = {
-                "type": label,  # e.g., 'hexagon'
-                "content": content_text,  # e.g., '1' or '7/S-3.2'
-                "bbox": [x1, y1, x2, y2],
-                "confidence": score.item()
-            }
-            detected_symbols.append(symbol_data)
+            symbol_data = SymbolData(
+                shape=str(label),
+                text_content=content_text,
+                bbox=[x1, y1, x2, y2]
+            )
 
-            # Optional: Save crop for debug
-            # crop.save(f"{output_dir}/symbol_{i}_{content_text.replace('/','-')}.png")
+            detected_symbols.append(symbol_data.model_dump())
 
         except Exception as e:
-            print(f"    ! Groq Error on symbol {i}: {e}")
+            logger.error(f"    ! Groq Error on symbol {i}: {e}")
 
-    print(f"  > Found {len(detected_symbols)} symbols.")
-    print(detected_symbols)
+    logger.info(f"  > Found {len(detected_symbols)} symbols.")
+
     return detected_symbols
-
-
-if __name__ == "__main__":
-    image_path = 'output_temp/floor_3/floor_3/vlm/images/c2071a8eb39ff6495f84a2cb170897bc62a795ef8b60ce9e337bd32f615e99dc.jpg'
-    output_dir = 'symbol_crops'
-    detect_and_read_symbols(image_path, output_dir)

@@ -1,8 +1,8 @@
 import sqlite3
 
 def update_job_status(job_id: str, status: str):
-
-    conn = sqlite3.connect("checkpoints.sqlite")
+    DB_PATH = "checkpoints.sqlite"
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
     cursor.execute(

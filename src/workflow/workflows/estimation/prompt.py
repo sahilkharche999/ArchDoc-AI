@@ -174,24 +174,38 @@ The shape is more important than the text alone.
 Do not guess the shape.
 If unclear, default to plain text.
 
-
 ------------------------------------------------------------
-STEP 5 — TABLE RECONSTRUCTION
+STEP 5 — TABLE RECONSTRUCTION (FOR SCHEDULES)
 ------------------------------------------------------------
 
-If header row is missing:
-Infer schedule title from visible text.
+If the crop is classified as "Schedule":
 
-If rows are partially cut:
-Reconstruct logically from visible data.
+1. Identify the HEADER ROW of the table.
+   - The header row usually contains column names such as:
+     MARK, WIDTH, LENGTH, SIZE, VERTICAL, HORIZONTAL, SPACING, REMARKS, etc.
 
-If rows are duplicated in overlapping crops:
-Only record each unique key once.
+2. Use the detected header row as the column names.
 
-Extract:
-- key_id
-- specs (full row description, verbatim)
+3. Extract each table row as a structured record where:
+   - Keys = column names
+   - Values = cell text from that column.
 
+4. Preserve the exact text written in each cell.
+   Do NOT summarize or rewrite values.
+
+5. If rows are partially cut or the table spans multiple crops,
+   reconstruct the row using visible data.
+
+6. If rows appear duplicated due to overlapping crops,
+   return each unique row only once.
+
+7. The FIRST COLUMN is usually the row identifier
+   (examples: CP2121, HEX-1, F5, L4, etc.).
+   Preserve it exactly as written.
+
+IMPORTANT:
+Do NOT compress the row into a sentence.
+Return the actual table structure.
 
 ------------------------------------------------------------
 STEP 6 — STRICT OUTPUT FORMAT
@@ -199,19 +213,50 @@ STEP 6 — STRICT OUTPUT FORMAT
 
 Return STRICT JSON only.
 
+For Schedule tables:
+
 {
-    "type": "Schedule" | "Keyed_Notes" | "Plan_View" | "Ignore",
-    "title": "Schedule or Notes Title",
-    "items": [
-        {
-            "key_id": "HEX-1",
-            "specs": "5/8 inch anchor bolt @ 16\" O.C."
-        },
-        {
-            "key_id": "F5",
-            "specs": "5x5 footing with #4 rebar"
-        }
-    ]
+  "type": "Schedule",
+  "title": "Schedule Name",
+  "columns": ["COLUMN1","COLUMN2","COLUMN3"],
+  "rows": [
+    {
+      "COLUMN1": "value",
+      "COLUMN2": "value",
+      "COLUMN3": "value"
+    }
+  ]
+}
+
+For Keyed Notes:
+
+{
+  "type": "Keyed_Notes",
+  "title": "Notes Title",
+  "items": [
+    {
+      "key_id": "HEX-1",
+      "text": "note description"
+    }
+  ]
+}
+
+For Plan Views:
+
+{
+  "type": "Plan_View",
+  "title": null,
+  "columns": [],
+  "rows": []
+}
+
+For Ignore:
+
+{
+  "type": "Ignore",
+  "title": null,
+  "columns": [],
+  "rows": []
 }
 
 Rules:
@@ -506,10 +551,12 @@ def prompt_for_extract_single_detail(group_title:str,group_detail_id:str):
 
     Explain briefly:
 
-    • Why this detail is what you identified
-    • What structural system it represents
-    • How you determined variable vs fixed logic
+    List ONLY the text that is explicitly visible in the drawing
+    that supports the extracted materials.
 
+    Do NOT interpret structural behavior.
+    Do NOT explain engineering logic.
+    
     ------------------------------------------------------------
     ### OUTPUT FORMAT
 
@@ -527,10 +574,7 @@ def prompt_for_extract_single_detail(group_title:str,group_detail_id:str):
         "notes": "Base connection clips"
         }}
     ],
-    "fabrication": {{
-        "total_bolts": 4,
-        "total_weld_inches": 12.0
-    }}
+    
     }}
 
     Rules:
@@ -543,7 +587,7 @@ def prompt_for_extract_single_detail(group_title:str,group_detail_id:str):
     return extract_single_detail_prompt
 
 # ------ AGENT 4. AGENT MERGER ----------
-def prompt_for_agent_4_merger(DETECTED_SYMBOLS:str,valid_materials_str:str):
+def prompt_for_agent_4_merger(DETECTED_SYMBOLS:str,valid_materials_str:str,sheet_number:str):
     """
     Accepts the list of dictionaries returned by Neo4j (graph_data).
     """
@@ -573,6 +617,9 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS:str,valid_materials_str:str):
     VALID MATERIALS LIST:
     {valid_materials_str}
 
+    CURRENT DRAWING SHEET:
+    {sheet_number}
+
     NOTE:
     Each symbol includes:
     - bbox (location on plan)
@@ -585,7 +632,7 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS:str,valid_materials_str:str):
     - Grid spacing
     - Floor elevations
     - Top of Steel elevation
-    - Known constants (e.g. 18.29 ft height if required)
+    - Known constants
 
     ------------------------------------------------------------
     ### YOUR CORE RESPONSIBILITY
@@ -689,7 +736,7 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS:str,valid_materials_str:str):
 
     Apply height from metadata:
     Height = Top of Steel - Base Elevation
-    (Default 18.29 ft if provided)
+
 
     Total LF = Count * Height
 
@@ -753,17 +800,32 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS:str,valid_materials_str:str):
         "description": "HSS 5x5x5/16",
         "total_qty": 4,
         "total_linear_feet": 73.16,
-        "logic_trace": "Found 4 columns at grids B-2, C-2. Applied 18.29 ft height."
+        "logic_trace": "Found 4 columns at grids B-2, C-2."
+        "source_sheet": "ST8",
+        "source_symbol": "105/ST8"
         }},
         {{
         "description": "5/8\" DIA. ANCHOR ROD",
         "total_qty": 22,
         "total_linear_feet": 33.0,
         "logic_trace": "Hex-1 shear wall 13'-10\". Spacing 16\" O.C. → 11 bolts * 2 walls."
+        "source_sheet": "ST3",
+        "source_symbol": "105/ST3"
         }}
     ]
     }}
+    ------------------------------------------------------------
+    STEP 6 — TRACEABILITY METADATA
+    ------------------------------------------------------------
 
+    Each material entry must include traceability fields:
+
+    • source_sheet → the drawing sheet where the calculation was performed
+    • source_symbol → the plan symbol or detail reference that triggered the material
+
+    Use the CURRENT DRAWING SHEET variable for source_sheet.
+
+    If multiple symbols contributed to the material, use the primary symbol that initiated the calculation.
     ------------------------------------------------------------
     ### STRICT RULES
 

@@ -1,19 +1,20 @@
 import sqlite3
 
-conn = sqlite3.connect("checkpoints.sqlite")
-cursor = conn.cursor()
+DB_PATH = "checkpoints.sqlite"
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS jobs (
-    job_id TEXT PRIMARY KEY,
-    name TEXT,
-    file_name TEXT,
-    status TEXT,
-    upload_date TEXT
-)
-""")
+def init_jobs_table():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
 
-conn.commit()
-conn.close()
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS jobs (
+        job_id TEXT PRIMARY KEY,
+        name TEXT,
+        file_name TEXT,
+        status TEXT,
+        upload_date TEXT
+    )
+    """)
 
-print("Jobs table created successfully")
+    conn.commit()
+    conn.close()

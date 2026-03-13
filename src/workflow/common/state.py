@@ -8,5 +8,5 @@ class ProjectState(TypedDict):
     page_map: Dict[int, str] 
     detail_library: Dict[str, Any] 
     general_rules: str 
-    final_bill_of_materials: Dict # Output from Agent 4
+    final_bill_of_materials: Dict 
     floor_plan_images:List[str]

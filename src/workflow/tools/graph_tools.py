@@ -1,5 +1,5 @@
 from langchain_core.tools import tool
-from src.utils import graph_db
+from src.infrastructure import graph_db
 from src.workflow.common.schemas import FinalEstimation
 
 @tool

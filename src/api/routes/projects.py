@@ -1,21 +1,15 @@
 from fastapi import APIRouter
+from fastapi import HTTPException
 import sqlite3
+from src.db.get_projects import get_projects as fetch_projects
 
-router = APIRouter()
+router = APIRouter(prefix="/projects", tags=["projects"])
 
-@router.get("/projects")
+
+@router.get("/")
 def get_projects():
 
-    conn = sqlite3.connect("checkpoints.sqlite")
-    cursor = conn.cursor()
-
-    rows = cursor.execute("""
-        SELECT job_id, name, status, upload_date
-        FROM jobs
-        ORDER BY upload_date DESC
-    """).fetchall()
-
-    conn.close()
+    rows = fetch_projects()
 
     projects = [
         {
@@ -28,3 +22,19 @@ def get_projects():
     ]
 
     return {"projects": projects}
+
+@router.get("/{job_id}")
+def get_project(job_id: str):
+    rows = fetch_projects()
+
+    for r in rows:
+        if r[0] == job_id:
+            return {
+                "job_id": r[0],
+                "name": r[1],
+                "status": r[2],
+                "date": r[3],
+                "file_path": f"assets/{r[0]}_structural.pdf"
+            }
+
+    raise HTTPException(status_code=404, detail="Project not found")

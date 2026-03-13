@@ -1,40 +1,26 @@
-from fastapi import APIRouter, UploadFile, File
-import sqlite3
+from fastapi import APIRouter, UploadFile, File, Form
 import os
 import uuid
-from src.workflow.common.logger import setup_logger
-from datetime import datetime
-logger = setup_logger(__name__)
+from src.logger import setup_logger
+from pypdf import PdfReader, PdfWriter
+from src.db.create_job import create_job
+from fastapi import HTTPException
 
-router = APIRouter()
+
+logger = setup_logger(__name__)
+router = APIRouter(prefix="/upload", tags=["upload"])
 
 UPLOAD_DIR = "assets"
 
-def create_job(job_id, file_name):
-
-    conn = sqlite3.connect("checkpoints.sqlite")
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        INSERT INTO jobs (job_id, name, file_name, status, upload_date)
-        VALUES (?, ?, ?, ?, ?)
-    """, (
-        job_id,
-        file_name,
-        file_name,
-        "Processing",
-        datetime.now().strftime("%Y-%m-%d")
-    ))
-
-    conn.commit()
-    conn.close()
-
-
-@router.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
+@router.post("/")
+async def upload_file(
+    file: UploadFile = File(...),
+    start_page: int = Form(...),
+    end_page: int = Form(...)
+):
 
     os.makedirs(UPLOAD_DIR, exist_ok=True)
-    logger.info("api call to upload the ")
+    logger.info(f"Upload request received: {file.filename}")
 
     job_id = str(uuid.uuid4())
 
@@ -43,10 +29,27 @@ async def upload_file(file: UploadFile = File(...)):
     with open(file_path, "wb") as f:
         f.write(await file.read())
         
-    create_job(job_id, file.filename)
+    reader = PdfReader(file_path)
+    writer = PdfWriter()
+    total_pages = len(reader.pages)
 
+    if start_page < 1 or end_page > total_pages or start_page > end_page:
+        raise HTTPException(status_code=400, detail="Invalid page range")
+    
+    for i in range(start_page - 1, end_page):
+        writer.add_page(reader.pages[i])
+
+    trimmed_path = os.path.join(UPLOAD_DIR, f"{job_id}_structural.pdf")
+
+    with open(trimmed_path, "wb") as f:
+        writer.write(f)
+    
+    display_name = os.path.splitext(file.filename)[0]
+    create_job(job_id, display_name)
+
+    os.remove(file_path)
     return {
         "job_id": job_id,
-        "file_path": file_path
+        "file_path": trimmed_path
     }
 
