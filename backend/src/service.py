@@ -1,12 +1,11 @@
-import uuid
-from src.workflow.workflows.estimation.graph import workflow
 from src.db.checkpoint import memory
+from src.workflow.workflows.estimation.graph import workflow
 
 # Compile once
 app = workflow.compile(checkpointer=memory)
 
-def stream_estimation(job_id: str,pdf_path: str, output_dir: str):
 
+def stream_estimation(job_id: str, pdf_path: str, output_dir: str):
     thread_id = job_id
     config = {"configurable": {"thread_id": thread_id}}
 
@@ -22,4 +21,3 @@ def stream_estimation(job_id: str,pdf_path: str, output_dir: str):
 
     for event in app.stream(initial_state, config=config):
         yield thread_id, event
-

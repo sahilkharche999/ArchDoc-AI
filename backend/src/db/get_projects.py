@@ -2,8 +2,8 @@ import sqlite3
 
 DB_PATH = "checkpoints.sqlite"
 
-def get_projects():
 
+def get_projects():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 

@@ -1,7 +1,8 @@
 import json
+
 from src.db.checkpoint import memory
-from src.workflow.workflows.estimation.graph import workflow
 from src.logger import setup_logger
+from src.workflow.workflows.estimation.graph import workflow
 
 logger = setup_logger(__name__)
 
@@ -51,4 +52,3 @@ def rerun_from_the_node(thread_id: str, state_step: str):
             if node_name == "agent_4_merger":
                 logger.info("Agent merger output:")
                 logger.info(json.dumps(state_update, indent=2))
-

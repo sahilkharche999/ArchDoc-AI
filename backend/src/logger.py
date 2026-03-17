@@ -1,4 +1,6 @@
 import logging
+
+
 def setup_logger(name: str = "app_logger") -> logging.Logger:
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
@@ -14,4 +16,3 @@ def setup_logger(name: str = "app_logger") -> logging.Logger:
         logger.addHandler(console_handler)
 
     return logger
-

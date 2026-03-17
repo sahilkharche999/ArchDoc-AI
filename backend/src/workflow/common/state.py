@@ -1,12 +1,11 @@
-import operator
-from typing import TypedDict, List, Dict, Any, Optional,Annotated
-from src.workflow.common.schemas import Region
+from typing import TypedDict, List, Dict, Any
+
 
 class ProjectState(TypedDict):
     pdf_path: str
     output_dir: str
-    page_map: Dict[int, str] 
-    detail_library: Dict[str, Any] 
-    general_rules: str 
-    final_bill_of_materials: Dict 
-    floor_plan_images:List[str]
+    page_map: Dict[int, str]
+    detail_library: Dict[str, Any]
+    general_rules: str
+    final_bill_of_materials: Dict
+    floor_plan_images: List[str]

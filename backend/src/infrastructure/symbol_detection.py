@@ -15,7 +15,6 @@ from src.logger import setup_logger
 logger = setup_logger(__name__)
 load_dotenv()
 
-
 DINO_MODEL_ID = "IDEA-Research/grounding-dino-base"
 processor = AutoProcessor.from_pretrained(DINO_MODEL_ID)
 model = AutoModelForZeroShotObjectDetection.from_pretrained(DINO_MODEL_ID)
@@ -64,7 +63,7 @@ Rules:
 class SymbolData(BaseModel):
     shape: str
     text_content: str
-    bbox: List[int] 
+    bbox: List[int]
 
 
 def image_to_base64(pil_image):
@@ -82,7 +81,7 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
     """
     logger.info(f"  > Running Symbol Detection on {os.path.basename(image_path)}...")
     with Image.open(image_path) as img:
-         image = img.convert("RGB")
+        image = img.convert("RGB")
 
     # 1. DINO Detection
     text_prompt = """
@@ -93,7 +92,6 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
 
     """
 
-
     inputs = processor(images=image, text=text_prompt, return_tensors="pt").to(DEVICE)
 
     with torch.no_grad():
@@ -102,7 +100,7 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
     results = processor.post_process_grounded_object_detection(
         outputs,
         inputs.input_ids,
-        threshold=0.19, 
+        threshold=0.19,
         text_threshold=0.10,
         target_sizes=[image.size[::-1]]
     )[0]
@@ -132,22 +130,22 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
             b64 = image_to_base64(crop)
             chat_completion = groq_client.chat.completions.create(
                 messages=[
-                                    {
-                                        "role": "user",
-                                        "content": [
-                                            {
-                                                "type": "text",
-                                                "text": SYMBOL_OCR_PROMPT
-                                            },
-                                            {
-                                                "type": "image_url",
-                                                "image_url": {
-                                                    "url": f"data:image/png;base64,{b64}"
-                                                }
-                                            }
-                                        ],
-                                    }
-                                ],
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": SYMBOL_OCR_PROMPT
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{b64}"
+                                }
+                            }
+                        ],
+                    }
+                ],
                 model="meta-llama/llama-4-scout-17b-16e-instruct",
                 temperature=0
             )

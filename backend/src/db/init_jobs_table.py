@@ -2,6 +2,7 @@ import sqlite3
 
 DB_PATH = "checkpoints.sqlite"
 
+
 def init_jobs_table():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()

@@ -1,30 +1,38 @@
+import json
+import os
 import time
+
+import certifi
+from dotenv import load_dotenv
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from neo4j import GraphDatabase
 from neo4j.exceptions import ServiceUnavailable, SessionExpired
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-import os
-from dotenv import load_dotenv
-import json
+
+from src.logger import setup_logger
 
 load_dotenv()
+logger = setup_logger(__name__)
+
 
 class ConstructionGraph:
     def __init__(self):
         uri = os.getenv("NEO4J_URI")
         user = os.getenv("NEO4J_USERNAME", "neo4j")
         password = os.getenv("NEO4J_PASSWORD")
-        self.driver = GraphDatabase.driver(uri, auth=(user, password))
-        
+        logger.info(f"NEO4J URI: {uri}")
+        logger.info(f"NEO4J USERNAME: {user}")
+        logger.info(f"NEO4J PASSWORD: {'****' if password else 'Not Set'}")
+        self.driver = GraphDatabase.driver(uri, auth=(user, password), trusted_certificates=certifi.where())
+
         # Initialize Embedding Model
         self.embedder = GoogleGenerativeAIEmbeddings(model="gemini-embedding-001")
-        
+
         # Create Vector Index (Run this once)
         self.create_vector_index()
 
     def close(self):
         self.driver.close()
 
-    
     def create_vector_index(self):
         """Creates a Vector Index on Definition nodes if it doesn't exist."""
         query = """
@@ -36,22 +44,23 @@ class ConstructionGraph:
          `vector.similarity_function`: 'cosine'
         }}
         """
+        logger.info(f"NEO4J URI : {os.getenv('NEO4J_URI')}")
         with self.driver.session() as session:
             session.run(query)
 
     # --- INGESTION (With Embeddings) ---
 
     def add_schedule_rule(
-    self,
-    project_id,
-    schedule_name,
-    symbol,
-    row_data,
-    columns,
-    page_num,
-    sheet_number
-):
-        print(f"DEBUG: Adding Rule {symbol} to {schedule_name}...") # <--- ADD THIS
+            self,
+            project_id,
+            schedule_name,
+            symbol,
+            row_data,
+            columns,
+            page_num,
+            sheet_number
+    ):
+        print(f"DEBUG: Adding Rule {symbol} to {schedule_name}...")  # <--- ADD THIS
         """
         Stores a rule from a schedule with Vector Embeddings.
         """
@@ -62,11 +71,10 @@ class ConstructionGraph:
             row_json = json.dumps(row_data)
             description = f"Symbol: {symbol}. Schedule: {schedule_name}. Row: {row_json}"
             # 2. Generate Vector
-            print("DEBUG: Generating Vector...") # <--- ADD THIS
+            print("DEBUG: Generating Vector...")  # <--- ADD THIS
             vector = self.embedder.embed_query(description)
-            print(f"DEBUG: Vector Generated (Size: {len(vector)})") # <--- ADD THIS
-            
-        
+            print(f"DEBUG: Vector Generated (Size: {len(vector)})")  # <--- ADD THIS
+
             # 3. Cypher Query
             query = """
             MERGE (proj:Project {id: $project_id})
@@ -86,35 +94,35 @@ class ConstructionGraph:
 
             MERGE (d)-[:FOUND_ON]->(p)
             """
-        
-        # 4. Execute
+
+            # 4. Execute
             with self.driver.session() as session:
-                    session.run(
-                        query,
-                        project_id=project_id,
-                        schedule_name=schedule_name,
-                        symbol=symbol,
-                        row_json=row_json,
-                        columns=columns,
-                        page_num=page_num,
-                        sheet_number=sheet_number,
-                        description=description,
-                        vector=vector
-                    )
+                session.run(
+                    query,
+                    project_id=project_id,
+                    schedule_name=schedule_name,
+                    symbol=symbol,
+                    row_json=row_json,
+                    columns=columns,
+                    page_num=page_num,
+                    sheet_number=sheet_number,
+                    description=description,
+                    vector=vector
+                )
             print(f"Graph: Added Rule '{symbol}' with Vector.")
         except Exception as e:
-            print(f"CRITICAL GRAPH ERROR: {e}") # <--- CATCH ERRORS
+            print(f"CRITICAL GRAPH ERROR: {e}")  # <--- CATCH ERRORS
 
     def add_detail_bom(
-    self,
-    project_id,
-    detail_key,
-    title,
-    materials_list,
-    page_num,
-    sheet_number
-):
-        
+            self,
+            project_id,
+            detail_key,
+            title,
+            materials_list,
+            page_num,
+            sheet_number
+    ):
+
         """
         Stores a Detail and its BOM, including Vector Embeddings for GraphRAG.
         """
@@ -122,20 +130,20 @@ class ConstructionGraph:
         # Example: "Detail: 7/S-3.2. Title: Ladder. Contains: MC6x15.1, L4x4"
         mat_text = ", ".join([m["item_name"] for m in materials_list])
         description = f"Detail: {detail_key}. Title: {title}. Contains: {mat_text}"
-        
+
         # 2. Generate Vector
         vector = self.embedder.embed_query(description)
-        
+
         # 3. Prepare Data for Cypher (Convert Pydantic/Dict to clean list)
         clean_materials = [
-        {
-        "item_name": m.get("item_name", ""),
-        "qty_rule": m.get("qty_rule") or "",
-        "notes": m.get("notes") or ""
-         }
-         for m in materials_list
+            {
+                "item_name": m.get("item_name", ""),
+                "qty_rule": m.get("qty_rule") or "",
+                "notes": m.get("notes") or ""
+            }
+            for m in materials_list
         ]
-        
+
         # 4. The Cypher Query
         query = """
         MERGE (proj:Project {id: $project_id})
@@ -165,29 +173,28 @@ class ConstructionGraph:
         for attempt in range(5):
             try:
                 with self.driver.session() as session:
-                 session.run(
-                    query,
-                    project_id=project_id,
-                    detail_key=detail_key,
-                    title=title,
-                    materials=clean_materials,
-                    page_num=page_num,
-                    sheet_number=sheet_number,
-                    description=description,
-                    vector=vector
-                )
+                    session.run(
+                        query,
+                        project_id=project_id,
+                        detail_key=detail_key,
+                        title=title,
+                        materials=clean_materials,
+                        page_num=page_num,
+                        sheet_number=sheet_number,
+                        description=description,
+                        vector=vector
+                    )
                 print(f"Graph: Added Detail BOM '{detail_key}'")
                 return
             except (ServiceUnavailable, SessionExpired) as e:
-                print(f"Neo4j connection dropped, retrying... {attempt+1}")
+                print(f"Neo4j connection dropped, retrying... {attempt + 1}")
                 time.sleep(1)
 
         raise Exception("Neo4j write failed after retries")
 
-        
     # --- RETRIEVAL (GraphRAG Search) ---
 
-    def semantic_search(self, query_text, project_id, sheet_number=None,limit=3):
+    def semantic_search(self, query_text, project_id, sheet_number=None, limit=3):
         """
         Finds the most relevant Definition (Rule/Detail) for a given query.
         """
@@ -231,7 +238,8 @@ class ConstructionGraph:
                 limit=limit
             )
 
-            records = list(result)  
+            records = list(result)
             return [r.data() for r in records]
+
 
 graph_db = ConstructionGraph()

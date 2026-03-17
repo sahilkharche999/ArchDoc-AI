@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from fastapi import HTTPException
-import sqlite3
+
 from src.db.get_projects import get_projects as fetch_projects
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -8,7 +8,6 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 
 @router.get("/")
 def get_projects():
-
     rows = fetch_projects()
 
     projects = [
@@ -22,6 +21,7 @@ def get_projects():
     ]
 
     return {"projects": projects}
+
 
 @router.get("/{job_id}")
 def get_project(job_id: str):

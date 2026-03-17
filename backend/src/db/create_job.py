@@ -3,8 +3,8 @@ from datetime import datetime
 
 DB_PATH = "checkpoints.sqlite"
 
-def create_job(job_id: str, file_name: str):
 
+def create_job(job_id: str, file_name: str):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
