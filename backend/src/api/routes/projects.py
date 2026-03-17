@@ -2,8 +2,10 @@ from fastapi import APIRouter
 from fastapi import HTTPException
 
 from src.db.get_projects import get_projects as fetch_projects
+from src.logger import setup_logger
 
 router = APIRouter(prefix="/projects", tags=["projects"])
+logger = setup_logger(__name__)
 
 
 @router.get("/")

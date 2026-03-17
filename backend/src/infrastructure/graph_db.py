@@ -22,7 +22,7 @@ class ConstructionGraph:
         logger.info(f"NEO4J URI: {uri}")
         logger.info(f"NEO4J USERNAME: {user}")
         logger.info(f"NEO4J PASSWORD: {'****' if password else 'Not Set'}")
-        self.driver = GraphDatabase.driver(uri, auth=(user, password), trusted_certificates=certifi.where())
+        self.driver = GraphDatabase.driver(uri, auth=(user, password))
 
         # Initialize Embedding Model
         self.embedder = GoogleGenerativeAIEmbeddings(model="gemini-embedding-001")

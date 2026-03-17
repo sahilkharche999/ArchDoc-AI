@@ -17,3 +17,4 @@ checkpoints.sqlite
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+backend/.env
