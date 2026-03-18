@@ -1,7 +1,6 @@
 import json
 import os
 import time
-
 import certifi
 from dotenv import load_dotenv
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
@@ -19,9 +18,7 @@ class ConstructionGraph:
         uri = os.getenv("NEO4J_URI")
         user = os.getenv("NEO4J_USERNAME", "neo4j")
         password = os.getenv("NEO4J_PASSWORD")
-        logger.info(f"NEO4J URI: {uri}")
-        logger.info(f"NEO4J USERNAME: {user}")
-        logger.info(f"NEO4J PASSWORD: {'****' if password else 'Not Set'}")
+        logger.info(f"Initializing Neo4j connection | uri={uri} | user={user}")
         self.driver = GraphDatabase.driver(uri, auth=(user, password))
 
         # Initialize Embedding Model
@@ -31,6 +28,7 @@ class ConstructionGraph:
         self.create_vector_index()
 
     def close(self):
+        logger.info("Closing Neo4j driver")
         self.driver.close()
 
     def create_vector_index(self):
@@ -44,7 +42,6 @@ class ConstructionGraph:
          `vector.similarity_function`: 'cosine'
         }}
         """
-        logger.info(f"NEO4J URI : {os.getenv('NEO4J_URI')}")
         with self.driver.session() as session:
             session.run(query)
 
@@ -60,7 +57,9 @@ class ConstructionGraph:
             page_num,
             sheet_number
     ):
-        print(f"DEBUG: Adding Rule {symbol} to {schedule_name}...")  # <--- ADD THIS
+        logger.info(
+    f"Adding schedule rule | project_id={project_id} | symbol={symbol} | schedule={schedule_name}"
+)
         """
         Stores a rule from a schedule with Vector Embeddings.
         """
@@ -71,9 +70,9 @@ class ConstructionGraph:
             row_json = json.dumps(row_data)
             description = f"Symbol: {symbol}. Schedule: {schedule_name}. Row: {row_json}"
             # 2. Generate Vector
-            print("DEBUG: Generating Vector...")  # <--- ADD THIS
+            logger.debug("Generating embedding vector")
             vector = self.embedder.embed_query(description)
-            print(f"DEBUG: Vector Generated (Size: {len(vector)})")  # <--- ADD THIS
+            logger.debug(f"Vector generated | dim={len(vector)}")
 
             # 3. Cypher Query
             query = """
@@ -109,9 +108,12 @@ class ConstructionGraph:
                     description=description,
                     vector=vector
                 )
-            print(f"Graph: Added Rule '{symbol}' with Vector.")
+            logger.info(
+        f"Schedule rule added successfully | project_id={project_id} | symbol={symbol}"
+    )
         except Exception as e:
-            print(f"CRITICAL GRAPH ERROR: {e}")  # <--- CATCH ERRORS
+           logger.error( f"Failed to add schedule rule | project_id={project_id} | symbol={symbol} | error={str(e)}")
+           raise
 
     def add_detail_bom(
             self,
@@ -132,7 +134,13 @@ class ConstructionGraph:
         description = f"Detail: {detail_key}. Title: {title}. Contains: {mat_text}"
 
         # 2. Generate Vector
-        vector = self.embedder.embed_query(description)
+        try:
+            vector = self.embedder.embed_query(description)
+        except Exception as e:
+            logger.error(
+                f"Embedding failed | project_id={project_id} | detail_key={detail_key} | error={str(e)}"
+            )
+            raise
 
         # 3. Prepare Data for Cypher (Convert Pydantic/Dict to clean list)
         clean_materials = [
@@ -184,12 +192,18 @@ class ConstructionGraph:
                         description=description,
                         vector=vector
                     )
-                print(f"Graph: Added Detail BOM '{detail_key}'")
+                logger.info(
+            f"Detail BOM added | project_id={project_id} | detail_key={detail_key}"
+        )
                 return
             except (ServiceUnavailable, SessionExpired) as e:
-                print(f"Neo4j connection dropped, retrying... {attempt + 1}")
+                logger.warning(
+    f"Neo4j retry | attempt={attempt+1}/5 | project_id={project_id} | detail_key={detail_key} | error={str(e)}"
+)
                 time.sleep(1)
-
+        logger.error(
+    f"Neo4j write failed after retries | project_id={project_id} | detail_key={detail_key}"
+)
         raise Exception("Neo4j write failed after retries")
 
     # --- RETRIEVAL (GraphRAG Search) ---
@@ -198,7 +212,16 @@ class ConstructionGraph:
         """
         Finds the most relevant Definition (Rule/Detail) for a given query.
         """
-        vector = self.embedder.embed_query(query_text)
+        try:
+            vector = self.embedder.embed_query(query_text)
+        except Exception as e:
+            logger.error(
+                f"Embedding failed | project_id={project_id} | query={query_text} | error={str(e)}"
+            )
+            raise
+        logger.info(
+    f"Semantic search | project_id={project_id} | query={query_text} | limit={limit}"
+)
 
         query = """
         // 1. Find the Detail Node
@@ -237,8 +260,8 @@ class ConstructionGraph:
                 sheet_number=sheet_number,
                 limit=limit
             )
-
             records = list(result)
+            logger.debug(f"Search results count | count={len(records)}")
             return [r.data() for r in records]
 
 

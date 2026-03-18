@@ -17,8 +17,18 @@ app = FastAPI(
 
 @app.on_event("startup")
 def startup():
-    init_jobs_table()
-    logger.info("DAX backend starting...")
+    logger.info("Starting DAX backend...")
+
+    try:
+        init_jobs_table()
+        logger.info("Database initialized successfully")
+
+    except Exception as e:
+        logger.error(f"Database initialization failed | error={str(e)}")
+        raise
+
+    logger.info("Startup complete")
+
 
 
 app.add_middleware(
@@ -30,7 +40,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.mount("/api/v1/assets", StaticFiles(directory="assets"), name="assets")
+try:
+    app.mount("/api/v1/assets", StaticFiles(directory="assets"), name="assets")
+    logger.info("Static files mounted | path=/api/v1/assets")
+
+except Exception as e:
+    logger.error(f"Failed to mount static files | error={str(e)}")
 
 app.include_router(upload.router, prefix="/api/v1")
 app.include_router(jobs.router, prefix="/api/v1")

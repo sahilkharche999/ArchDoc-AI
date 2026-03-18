@@ -79,9 +79,15 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
     2. Crops them.
     3. Uses Groq (Llama Vision) to read the text inside.
     """
-    logger.info(f"  > Running Symbol Detection on {os.path.basename(image_path)}...")
-    with Image.open(image_path) as img:
-        image = img.convert("RGB")
+    logger.info(
+        f"Symbol detection started | image={os.path.basename(image_path)} | output_dir={output_dir}"
+    )
+    try:
+        with Image.open(image_path) as img:
+            image = img.convert("RGB")
+    except Exception as e:
+        logger.error(f"Image load failed | image={image_path} | error={str(e)}")
+        raise
 
     # 1. DINO Detection
     text_prompt = """
@@ -94,8 +100,14 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
 
     inputs = processor(images=image, text=text_prompt, return_tensors="pt").to(DEVICE)
 
-    with torch.no_grad():
-        outputs = model(**inputs)
+    try:
+        logger.debug("Running DINO inference")
+        with torch.no_grad():
+            outputs = model(**inputs)
+        logger.debug("DINO inference completed")
+    except Exception as e:
+        logger.error(f"DINO inference failed | image={image_path} | error={str(e)}")
+        raise
 
     results = processor.post_process_grounded_object_detection(
         outputs,
@@ -111,6 +123,9 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
     # 2. Process Detections
     for i, (score, label, box) in enumerate(zip(results["scores"], results["labels"], results["boxes"])):
         if score.item() < 0.20: continue
+        logger.debug(
+            f"Detection accepted | index={i} | label={label} | score={score.item():.2f}"
+        )
 
         # Get Coords
         x1, y1, x2, y2 = map(int, box.tolist())
@@ -127,6 +142,9 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
 
         # 3. Groq / Llama Vision for Reading
         try:
+            logger.debug(
+                f"OCR request | index={i} | label={label} | bbox={crop_box}"
+            )
             b64 = image_to_base64(crop)
             chat_completion = groq_client.chat.completions.create(
                 messages=[
@@ -150,6 +168,9 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
                 temperature=0
             )
             content_text = chat_completion.choices[0].message.content.strip()
+            logger.debug(
+                f"OCR success | index={i} | extracted={content_text}"
+            )
 
             symbol_data = SymbolData(
                 shape=str(label),
@@ -160,8 +181,14 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
             detected_symbols.append(symbol_data.model_dump())
 
         except Exception as e:
-            logger.error(f"    ! Groq Error on symbol {i}: {e}")
+            logger.error(
+                f"OCR failed | image={os.path.basename(image_path)} | index={i} | label={label} | bbox={crop_box} | error={str(e)}"
+            )
+            raise
 
-    logger.info(f"  > Found {len(detected_symbols)} symbols.")
+        logger.info(
+        f"Symbol detection completed | image={os.path.basename(image_path)} | count={len(detected_symbols)}"
+    )
+
 
     return detected_symbols
