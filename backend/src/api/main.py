@@ -1,13 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-
+import os
 from src.api.routes import upload, jobs, projects
 from src.db.init_jobs_table import init_jobs_table
 from src.logger import setup_logger
 
 logger = setup_logger(__name__)
-
 app = FastAPI(
     title="DAX API",
     version="1.0.0",
@@ -20,6 +19,8 @@ def startup():
     logger.info("Starting DAX backend...")
 
     try:
+        os.makedirs("assets", exist_ok=True)
+        logger.info("Assets directory ready")
         init_jobs_table()
         logger.info("Database initialized successfully")
 
