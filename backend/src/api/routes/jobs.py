@@ -66,4 +66,5 @@ def get_job_result(job_id: str):
             "bom": bom
         }
     except Exception as e:
+        logger.exception(f"Failed to fetch result | job_id={job_id}")
         raise 
