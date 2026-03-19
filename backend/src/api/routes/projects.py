@@ -1,7 +1,8 @@
 from fastapi import APIRouter
 from fastapi import HTTPException
 
-from src.db.get_projects import get_projects as fetch_projects
+from src.db.get_projects import get_projects as fetch_projects 
+from src.db.get_projects import get_projects_by_id
 from src.logger import setup_logger
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -26,32 +27,30 @@ def get_projects():
             for r in rows
         ]
         logger.info(f"Projects response ready | count={len(projects)}")
-
         return {"projects": projects}
     except Exception as e:
-        logger.error(f"Failed to fetch projects | error={str(e)}")
-        raise
+        logger.exception(f"Failed to fetch projects | error={str(e)}")
+        return { "projects": [] }
 
 
 @router.get("/{job_id}")
 def get_project(job_id: str):
-    logger.info(f"Fetch single project request | job_id={job_id}")
+    logger.info(f"Fetching project from DB with ID: {job_id}")
     try:
-        rows = fetch_projects()
-        logger.debug(f"Fetched projects for lookup | count={len(rows)}")
-
-        for r in rows:
-            if r[0] == job_id:
-                logger.info(f"Project found | job_id={job_id}")
-                return {
-                    "job_id": r[0],
-                    "name": r[1],
-                    "status": r[2],
-                    "date": r[3],
-                    "file_path": f"assets/{r[0]}_structural.pdf"
-                }
-        logger.error(f"Project not found | job_id={job_id}")
-        raise HTTPException(status_code=404, detail="Project not found")
+        row = get_projects_by_id(job_id=job_id)
+        if row is None:
+            logger.warning(f"Project not found | job_id={job_id}")
+            raise HTTPException(status_code=404, detail="Project not found")
+        logger.info("Project fetched successfully")
+        return {
+            "job_id": row[0],
+            "name": row[1],
+            "status": row[2],
+            "date": row[3],
+            "file_path": f"assets/{row[0]}_structural.pdf"
+        }
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error fetching project | job_id={job_id} | error={str(e)}")
+        logger.exception(f"Error fetching project | job_id={job_id} | error={str(e)}")
         raise

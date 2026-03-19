@@ -25,7 +25,6 @@ async def upload_file(
         f"Upload request received | filename={file.filename} | start={start_page} | end={end_page}"
     )
 
-
     job_id = str(uuid.uuid4())
 
     file_path = os.path.join(UPLOAD_DIR, f"{job_id}_{file.filename}")

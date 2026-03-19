@@ -23,3 +23,19 @@ def get_projects():
     except Exception as e:
         logger.error(f"Failed to fetch projects | error={str(e)}")
         raise 
+
+def get_projects_by_id(job_id:str):
+    logger.info("Fetching projects from DB with ID : {job_id}")
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+
+        rows = cursor.execute("SELECT * FROM jobs WHERE job_id = ?",(job_id,)).fetchone()
+
+        conn.close()
+        logger.info(f"Projects fetched successfully | count={len(rows)}")
+        return rows
+    except Exception as e:
+        logger.error(f"Failed to fetch projects | error={str(e)}")
+        raise 
+    

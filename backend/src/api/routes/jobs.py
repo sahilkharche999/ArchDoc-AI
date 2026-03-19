@@ -17,6 +17,8 @@ MATERIAL_LOOKUP = load_material_weights(EXCEL_PATH)
 
 def event_generator(job_id, file_path):
     logger.info(f"Event stream started | job_id={job_id} | file={file_path}")
+    if not job_id:
+      raise HTTPException(status_code=400, detail="Invalid job_id")
     try:
         for thread_id, event in stream_estimation(job_id, file_path, "output_temp"):
             for node_name, state_update in event.items():
@@ -28,7 +30,11 @@ def event_generator(job_id, file_path):
         logger.info(f"Event stream completed | job_id={job_id}")
     except Exception as e:
          logger.error(f"Event stream failed | job_id={job_id} | error={str(e)}")
-         raise
+         error_payload = {
+        "error": "Something went wrong",
+        "details": str(e)
+          }
+         yield f"data: {json.dumps(error_payload)}\n\n"
 
 
 
@@ -67,4 +73,5 @@ def get_job_result(job_id: str):
         }
     except Exception as e:
         logger.exception(f"Failed to fetch result | job_id={job_id}")
-        raise 
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
