@@ -130,10 +130,18 @@ class ScheduleRule(BaseModel):
     symbol: str = Field(description="The symbol being defined e.g. '<1>' or 'F5'")
     specs: str = Field(description="The definition e.g. '5/8 bolt @ 16oc'")
 
+class Rule(BaseModel):
+    rule_number: int
+    text: str
+
+class Section(BaseModel):
+    section_name: str
+    rules: List[Rule]
 
 class TextRulesExtraction(BaseModel):
-    rules: List[ScheduleRule]
+    sections: List[Section]
     general_notes: List[str]
+
 
 
 class IngestionOutput(BaseModel):

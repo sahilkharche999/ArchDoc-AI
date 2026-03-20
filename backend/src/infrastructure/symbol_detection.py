@@ -1,63 +1,42 @@
 # utils/symbol_detection.py
 import base64
 import os
+import re
+import io
 from typing import List, Dict
-
 import torch
 from PIL import Image
 from dotenv import load_dotenv
-from groq import Groq
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
+from src.workflow.workflows.estimation.prompt import SYMBOL_OCR_PROMPT
+from src.workflow.common.utils import load_image_base64
 
 from src.logger import setup_logger
 
 logger = setup_logger(__name__)
 load_dotenv()
-
+llm_flash = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite",temperature=0) 
 DINO_MODEL_ID = "IDEA-Research/grounding-dino-base"
 processor = AutoProcessor.from_pretrained(DINO_MODEL_ID)
 model = AutoModelForZeroShotObjectDetection.from_pretrained(DINO_MODEL_ID)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 model.to(DEVICE)
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-SYMBOL_OCR_PROMPT = """
-You are reading a structural drawing symbol.
 
-There are only two valid outputs:
 
-1) If this is a HEXAGON containing a number N:
-return exactly: hex-N
+def clean_output(text: str) -> str:
+    text = text.strip()
 
-2) If this is a DETAIL CALLOUT (circle over triangle)
-containing:
-- Top: a number (e.g., 3)
-- Bottom: a sheet reference (e.g., S-3.2)
+    # Valid patterns
+    if re.match(r"^hex-\d+$", text):
+        return text
 
-return exactly: NUMBER/SHEET
+    if re.match(r"^\d+/S-\d+(\.\d+)?$", text):
+        return text
 
-Examples:
-hex-1
-3/S-3.2
-4/S-4.0
-
-Rules:
-- NO spaces
-- NO newline
-- NO explanation
-- NO markdown
-- Output only the final formatted value
-- Valid outputs ONLY:
-    hex-N
-    NUMBER/SHEET
-    Unknown
-
-    Examples:
-    hex-1
-    3/S-3.2
-    4/S-4.0
-    Unknown
-"""
+    return "Unknown"
 
 
 class SymbolData(BaseModel):
@@ -66,18 +45,11 @@ class SymbolData(BaseModel):
     bbox: List[int]
 
 
-def image_to_base64(pil_image):
-    from io import BytesIO
-    buff = BytesIO()
-    pil_image.save(buff, format="PNG")
-    return base64.b64encode(buff.getvalue()).decode("utf-8")
-
-
 def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
     """
     1. Uses Grounding DINO to find symbols (Hexagons, Circles).
     2. Crops them.
-    3. Uses Groq (Llama Vision) to read the text inside.
+    3. Uses Gemini to read the text inside.
     """
     logger.info(
         f"Symbol detection started | image={os.path.basename(image_path)} | output_dir={output_dir}"
@@ -139,37 +111,37 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
 
         # Crop
         crop = image.crop(crop_box)
-
-        # 3. Groq / Llama Vision for Reading
+        buffer = io.BytesIO()
+        crop.save(buffer, format="PNG")
+        base64_image = base64.b64encode(buffer.getvalue()).decode()
+        
+        # 3. Gemini Vision for Reading
         try:
             logger.debug(
                 f"OCR request | index={i} | label={label} | bbox={crop_box}"
             )
-            b64 = image_to_base64(crop)
-            chat_completion = groq_client.chat.completions.create(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": SYMBOL_OCR_PROMPT
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/png;base64,{b64}"
-                                }
-                            }
-                        ],
+
+            msg = HumanMessage(content=[
+                {"type": "text", "text": SYMBOL_OCR_PROMPT()},
+                { 
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{base64_image}"
+                        }
                     }
-                ],
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
-                temperature=0
-            )
-            content_text = chat_completion.choices[0].message.content.strip()
+
+            ])
+
+            response = llm_flash.invoke([msg])
+
+            if isinstance(response.content, str):
+             raw_text = response.content.strip()
+            else:
+             raw_text = response.content[0]["text"].strip()
+            content_text = clean_output(raw_text)
+
             logger.debug(
-                f"OCR success | index={i} | extracted={content_text}"
+                f"OCR success | index={i} | raw={raw_text} | cleaned={content_text}"
             )
 
             symbol_data = SymbolData(
@@ -186,7 +158,7 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
             )
             raise
 
-        logger.info(
+    logger.info(
         f"Symbol detection completed | image={os.path.basename(image_path)} | count={len(detected_symbols)}"
     )
 

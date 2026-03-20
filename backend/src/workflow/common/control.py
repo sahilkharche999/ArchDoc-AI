@@ -52,3 +52,10 @@ def rerun_from_the_node(thread_id: str, state_step: str):
             if node_name == "agent_4_merger":
                 logger.info("Agent merger output:")
                 logger.info(json.dumps(state_update, indent=2))
+
+
+if __name__=="__main__":
+    thread_id="6c5b503f-3c43-4ace-95e6-8a9bc7870ca9"
+    state_step="process_details"
+    rerun_from_the_node(thread_id,state_step)
+

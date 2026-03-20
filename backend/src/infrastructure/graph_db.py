@@ -46,6 +46,53 @@ class ConstructionGraph:
             session.run(query)
 
     # --- INGESTION (With Embeddings) ---
+    def add_text_rule(
+    self,
+    project_id,
+    section_name,
+    rule_number,
+    text
+):
+        try:
+            # 1. Create unique ID
+            rule_id = f"{section_name}_{rule_number}"
+
+            # 2. Create embedding text
+            description = f"{section_name} Rule {rule_number}: {text}"
+
+            # 3. Generate embedding
+            vector = self.embedder.embed_query(description)
+
+            query = """
+            MERGE (proj:Project {id: $project_id})
+
+            MERGE (s:Section {name: $section_name, project: $project_id})
+            MERGE (proj)-[:HAS_SECTION]->(s)
+
+            MERGE (r:Definition {id: $rule_id, project: $project_id})
+            SET r:Rule
+            SET r.text = $text
+            SET r.order = $rule_number
+            SET r.embedding = $vector
+
+            MERGE (s)-[:HAS_RULE]->(r)
+            """
+
+            with self.driver.session() as session:
+                session.run(
+                    query,
+                    project_id=project_id,
+                    section_name=section_name,
+                    rule_id=rule_id,
+                    text=text,
+                    rule_number=rule_number,
+                    vector=vector
+                )
+
+        except Exception as e:
+            logger.error(f"Failed to add text rule: {e}")
+            raise
+
 
     def add_schedule_rule(
             self,
