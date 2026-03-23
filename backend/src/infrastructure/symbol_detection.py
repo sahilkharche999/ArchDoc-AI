@@ -1,29 +1,38 @@
 # utils/symbol_detection.py
 import base64
+import io
 import os
 import re
-import io
 from typing import List, Dict
+
 import torch
 from PIL import Image
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel
-from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
-from src.workflow.workflows.estimation.prompt import SYMBOL_OCR_PROMPT
-from src.workflow.common.utils import load_image_base64
 
 from src.logger import setup_logger
+from src.workflow.workflows.estimation.prompt import SYMBOL_OCR_PROMPT
 
 logger = setup_logger(__name__)
 load_dotenv()
-llm_flash = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite",temperature=0) 
+llm_flash = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", temperature=0)
 DINO_MODEL_ID = "IDEA-Research/grounding-dino-base"
-processor = AutoProcessor.from_pretrained(DINO_MODEL_ID)
-model = AutoModelForZeroShotObjectDetection.from_pretrained(DINO_MODEL_ID)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-model.to(DEVICE)
+
+_processor = None
+_model = None
+
+
+def _load_model():
+    global _processor, _model
+    if _processor is None:
+        from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
+        logger.info("Loading Grounding DINO model...")
+        _processor = AutoProcessor.from_pretrained(DINO_MODEL_ID)
+        _model = AutoModelForZeroShotObjectDetection.from_pretrained(DINO_MODEL_ID).to(DEVICE)
+        logger.info("Grounding DINO model loaded.")
 
 
 def clean_output(text: str) -> str:
@@ -51,6 +60,7 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
     2. Crops them.
     3. Uses Gemini to read the text inside.
     """
+    _load_model()
     logger.info(
         f"Symbol detection started | image={os.path.basename(image_path)} | output_dir={output_dir}"
     )
@@ -70,18 +80,18 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
 
     """
 
-    inputs = processor(images=image, text=text_prompt, return_tensors="pt").to(DEVICE)
+    inputs = _processor(images=image, text=text_prompt, return_tensors="pt").to(DEVICE)
 
     try:
         logger.debug("Running DINO inference")
         with torch.no_grad():
-            outputs = model(**inputs)
+            outputs = _model(**inputs)
         logger.debug("DINO inference completed")
     except Exception as e:
         logger.error(f"DINO inference failed | image={image_path} | error={str(e)}")
         raise
 
-    results = processor.post_process_grounded_object_detection(
+    results = _processor.post_process_grounded_object_detection(
         outputs,
         inputs.input_ids,
         threshold=0.19,
@@ -114,7 +124,7 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
         buffer = io.BytesIO()
         crop.save(buffer, format="PNG")
         base64_image = base64.b64encode(buffer.getvalue()).decode()
-        
+
         # 3. Gemini Vision for Reading
         try:
             logger.debug(
@@ -123,21 +133,21 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
 
             msg = HumanMessage(content=[
                 {"type": "text", "text": SYMBOL_OCR_PROMPT()},
-                { 
+                {
                     "type": "image_url",
                     "image_url": {
                         "url": f"data:image/png;base64,{base64_image}"
-                        }
                     }
+                }
 
             ])
 
             response = llm_flash.invoke([msg])
 
             if isinstance(response.content, str):
-             raw_text = response.content.strip()
+                raw_text = response.content.strip()
             else:
-             raw_text = response.content[0]["text"].strip()
+                raw_text = response.content[0]["text"].strip()
             content_text = clean_output(raw_text)
 
             logger.debug(
@@ -161,6 +171,5 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
     logger.info(
         f"Symbol detection completed | image={os.path.basename(image_path)} | count={len(detected_symbols)}"
     )
-
 
     return detected_symbols

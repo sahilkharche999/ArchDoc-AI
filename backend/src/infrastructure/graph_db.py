@@ -19,7 +19,7 @@ class ConstructionGraph:
         user = os.getenv("NEO4J_USERNAME", "neo4j")
         password = os.getenv("NEO4J_PASSWORD")
         logger.info(f"Initializing Neo4j connection | uri={uri} | user={user}")
-        self.driver = GraphDatabase.driver(uri, auth=(user, password))
+        self.driver = GraphDatabase.driver(uri, auth=("", ""))
 
         # Initialize Embedding Model
         self.embedder = GoogleGenerativeAIEmbeddings(model="gemini-embedding-001")
@@ -32,18 +32,19 @@ class ConstructionGraph:
         self.driver.close()
 
     def create_vector_index(self):
-        """Creates a Vector Index on Definition nodes if it doesn't exist."""
+        """Creates a Vector Index on Definition nodes if it doesn't exist (Memgraph syntax)."""
         query = """
-        CREATE VECTOR INDEX definition_index IF NOT EXISTS
-        FOR (d:Definition)
-        ON (d.embedding)
-        OPTIONS {indexConfig: {
-         `vector.dimensions`: 3072,  
-         `vector.similarity_function`: 'cosine'
-        }}
+        CREATE VECTOR INDEX definition_index ON :Definition(embedding)
+        WITH CONFIG {"dimension": 3072, "capacity": 10000, "metric": "cos"}
         """
         with self.driver.session() as session:
-            session.run(query)
+            try:
+                session.run(query)
+            except Exception as e:
+                if "already exists" in str(e).lower():
+                    logger.info("Vector index definition_index already exists, skipping.")
+                else:
+                    raise
 
     # --- INGESTION (With Embeddings) ---
     def add_text_rule(
@@ -272,7 +273,7 @@ class ConstructionGraph:
 
         query = """
         // 1. Find the Detail Node
-        CALL db.index.vector.queryNodes('definition_index', $limit, $vector)
+        CALL vector_search.search('definition_index', $limit, $vector)
         YIELD node, score
         MATCH (node)-[:FOUND_ON]->(p:Sheet)
         WHERE node.project = $project_id
