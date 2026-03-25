@@ -1,31 +1,25 @@
-import sqlite3
+from src.db.connection import get_conn, release_conn
 from src.logger import setup_logger
 
 logger = setup_logger(__name__)
 
+
 def update_job_status(job_id: str, status: str):
     logger.info(f"Updating job status | job_id={job_id} | status={status}")
+    conn = get_conn()
     try:
-
-        DB_PATH = "checkpoints.sqlite"
-        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-
-        cursor.execute(
-            """
+        cursor.execute("""
             UPDATE jobs
-            SET status = ?
-            WHERE job_id = ?
-            """,
-            (status, job_id)
-        )
-
+            SET status = %s
+            WHERE job_id = %s
+        """, (status, job_id))
         conn.commit()
-        conn.close()
+        cursor.close()
         logger.info(f"Job status updated successfully | job_id={job_id}")
     except Exception as e:
-        logger.error(
-            f"Failed to update job status | job_id={job_id} | error={str(e)}"
-        )
+        conn.rollback()
+        logger.error(f"Failed to update job status | job_id={job_id} | error={str(e)}")
         raise
-
+    finally:
+        release_conn(conn)

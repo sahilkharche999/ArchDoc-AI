@@ -1,6 +1,6 @@
-import sqlite3
+from langgraph.checkpoint.postgres import PostgresSaver
 
-from langgraph.checkpoint.sqlite import SqliteSaver
+from src.db.connection import pg_conn_string
 
-conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
-memory = SqliteSaver(conn)
+memory = PostgresSaver.from_conn_string(pg_conn_string)
+memory.setup()
