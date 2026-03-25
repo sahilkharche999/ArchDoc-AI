@@ -11,7 +11,7 @@ from src.workflow.common.utils import load_material_weights
 
 logger = setup_logger(__name__)
 router = APIRouter()
-EXCEL_PATH = "#1A Steel Estimator (2023).xlsx"
+EXCEL_PATH = "Steel Estimator.xlsx"
 MATERIAL_LOOKUP = load_material_weights(EXCEL_PATH)
 
 
