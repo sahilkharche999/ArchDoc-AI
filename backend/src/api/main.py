@@ -1,13 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-
+import os
 from src.api.routes import upload, jobs, projects
 from src.db.init_jobs_table import init_jobs_table
 from src.logger import setup_logger
 
 logger = setup_logger(__name__)
-
 app = FastAPI(
     title="DAX API",
     version="1.0.0",
@@ -17,20 +16,37 @@ app = FastAPI(
 
 @app.on_event("startup")
 def startup():
-    init_jobs_table()
-    logger.info("DAX backend starting...")
+    logger.info("Starting DAX backend...")
+
+    try:
+        os.makedirs("assets", exist_ok=True)
+        logger.info("Assets directory ready")
+        init_jobs_table()
+        logger.info("Database initialized successfully")
+
+    except Exception as e:
+        logger.error(f"Database initialization failed | error={str(e)}")
+        raise
+
+    logger.info("Startup complete")
+
 
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173"
+        "*"
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.mount("/api/v1/assets", StaticFiles(directory="assets"), name="assets")
+try:
+    app.mount("/api/v1/assets", StaticFiles(directory="assets"), name="assets")
+    logger.info("Static files mounted | path=/api/v1/assets")
+
+except Exception as e:
+    logger.error(f"Failed to mount static files | error={str(e)}")
 
 app.include_router(upload.router, prefix="/api/v1")
 app.include_router(jobs.router, prefix="/api/v1")

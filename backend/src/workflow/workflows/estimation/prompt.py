@@ -843,3 +843,43 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS:str,valid_materials_str:str,sheet
     Compute precisely.
     """
     return prompt
+
+def SYMBOL_OCR_PROMPT():
+  SYMBOL_OCR_PROMPT = """
+    You are reading a structural drawing symbol.
+
+    There are only two valid outputs:
+
+    1) If this is a HEXAGON containing a number N:
+    return exactly: hex-N
+
+    2) If this is a DETAIL CALLOUT (circle over triangle)
+    containing:
+    - Top: a number (e.g., 3)
+    - Bottom: a sheet reference (e.g., S-3.2)
+
+    return exactly: NUMBER/SHEET
+
+    Examples:
+    hex-1
+    3/S-3.2
+    4/S-4.0
+
+    Rules:
+    - NO spaces
+    - NO newline
+    - NO explanation
+    - NO markdown
+    - Output only the final formatted value
+    - Valid outputs ONLY:
+        hex-N
+        NUMBER/SHEET
+        Unknown
+
+        Examples:
+        hex-1
+        3/S-3.2
+        4/S-4.0
+        Unknown
+    """
+  return SYMBOL_OCR_PROMPT

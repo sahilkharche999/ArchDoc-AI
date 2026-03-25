@@ -6,10 +6,9 @@ __pycache__
 *.pyc
 *.png
 *.jpg
-*.jpeg
 *.pdf
 output_temp
-assets
+backend/assets
 *.xlsx
 output
 debug_crops
@@ -18,3 +17,4 @@ checkpoints.sqlite
 *.sqlite-shm
 *.sqlite-wal
 backend/.env
+frontend/.vite

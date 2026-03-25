@@ -29,10 +29,6 @@ from src.workflow.common.utils import (
     load_material_weights,              
     minerU_pdf_creating_extration                
     )
-from src.workflow.tools.graph_tools import (
-    lookup_symbol_definition,
-    submit_final_estimate
-    )
 
 from src.infrastructure.graph_db import graph_db
 from src.infrastructure.symbol_detection import detect_and_read_symbols 
@@ -150,17 +146,18 @@ def node_process_text_rules(state: ProjectState):
         
         try:
             result = llm_flash.with_structured_output(TextRulesExtraction).invoke([msg])
-            
+            logger.info(f"LLM OUTPUT: {result}")
             # Store Rules in Graph
-            for rule in result.rules:
-                graph_db.add_schedule_rule(
-                    project_id=os.path.basename(state["pdf_path"]), # Use filename as ID
-                    schedule_name=rule.schedule_name,
-                    symbol=rule.symbol,
-                    specs=rule.specs,
-                    page_num=page_num
-                )
-                logger.info(f"   > Graph: Added Rule '{rule.symbol}' for {rule.schedule_name}")
+            for section in result.sections:
+                section_name = section.section_name
+                for rule in section.rules:
+                    graph_db.add_text_rule(
+                        project_id=os.path.basename(state["pdf_path"]),
+                        section_name=section_name,
+                        rule_number=rule.rule_number,
+                        text=rule.text
+                    )
+                    logger.info( f"   > Graph: Added Rule {rule.rule_number} in section '{section_name}'")
             
             # Store General Notes in State (Memory)
             if result.general_notes:
@@ -168,7 +165,7 @@ def node_process_text_rules(state: ProjectState):
                 state["general_rules"] += formatted_notes
 
         except Exception as e:
-            logger.info(f"Failed to parse text rules on page {page_num}: {e}")
+            logger.exception(f"Failed to parse text rules on page {page_num}: {e}")
                 
     return {"general_rules": state["general_rules"]}
 
@@ -303,7 +300,7 @@ def node_process_plans(state: ProjectState):
                             "sheet": sheet_number
                         })
                 except Exception as e:
-                    logger.error(f"     ! Failed to ingest {img_file}: {e}")
+                    logger.exception(f"     ! Failed to ingest {img_file}: {e}")
                     
     return {
         "floor_plan_images": floor_plan_images, 

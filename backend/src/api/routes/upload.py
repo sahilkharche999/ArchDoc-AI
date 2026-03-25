@@ -21,7 +21,9 @@ async def upload_file(
         end_page: int = Form(...)
 ):
     os.makedirs(UPLOAD_DIR, exist_ok=True)
-    logger.info(f"Upload request received: {file.filename}")
+    logger.info(
+        f"Upload request received | filename={file.filename} | start={start_page} | end={end_page}"
+    )
 
     job_id = str(uuid.uuid4())
 
