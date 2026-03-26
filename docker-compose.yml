@@ -17,6 +17,8 @@ services:
       - "8000:8000"
     env_file:
       - ./backend/.env
+    volumes:
+      - /data/assets:/app/assets
 
   memgraph:
     image: memgraph/memgraph:latest

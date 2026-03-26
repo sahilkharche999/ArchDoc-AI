@@ -14,13 +14,14 @@ app = FastAPI(
 )
 
 
+os.makedirs("assets", exist_ok=True)
+
+
 @app.on_event("startup")
 def startup():
     logger.info("Starting DAX backend...")
 
     try:
-        os.makedirs("assets", exist_ok=True)
-        logger.info("Assets directory ready")
         init_jobs_table()
         logger.info("Database initialized successfully")
 
