@@ -40,7 +40,7 @@ export function Sidebar({ onNewEstimation, selectedProjectId, onSelectProject }:
       <div className="p-6 border-b border-sidebar-border">
         <div className="flex items-center gap-3">
           <img
-            src="src/assets/dax_mfg_logo.jpeg"
+            src="/assets/dax_mfg_logo.jpeg"
             alt="DAX Logo"
             className="w-8 h-8 rounded"
           />
