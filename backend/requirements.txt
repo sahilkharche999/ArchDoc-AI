@@ -4,6 +4,7 @@ langchain_core==1.2.19
 langchain_google_genai==4.2.1
 langgraph-checkpoint-postgres
 psycopg2-binary
+psycopg[binary]
 langgraph==1.1.2
 neo4j==6.1.0
 openpyxl
