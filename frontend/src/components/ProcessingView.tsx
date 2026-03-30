@@ -73,7 +73,7 @@ export function ProcessingView({ jobId, filePath, onComplete, }: ProcessingViewP
     } catch (err) {
       console.error("Polling error:", err);
     }
-  }, 5000); // 🔥 every 5 sec
+  }, 60000); // 🔥 every 1 min
 
   return () => clearInterval(interval);
 }, [jobId]);

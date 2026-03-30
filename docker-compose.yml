@@ -19,6 +19,7 @@ services:
       - ./backend/.env
     volumes:
       - /data/assets:/app/assets
+      - /var/log/dax:/var/log/dax
 
   memgraph:
     image: memgraph/memgraph:latest

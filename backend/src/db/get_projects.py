@@ -63,6 +63,7 @@ def get_job_progress(job_id: str):
 
 
 def update_project(job_id: str, new_name: str):
+    logger.debug(f"[DB] Update project | job_id={job_id} | new_name={new_name}")
     conn = get_conn()
     try:
         cursor = conn.cursor()
@@ -75,9 +76,12 @@ def update_project(job_id: str, new_name: str):
 
         conn.commit()
         cursor.close()
-
+        logger.debug(f"[DB] Project updated | job_id={job_id}")
     except Exception as e:
         conn.rollback()
+        logger.error(
+            f"[DB] Update project failed | job_id={job_id} | error={str(e)}"
+        )
         raise
 
     finally:
@@ -86,6 +90,7 @@ def update_project(job_id: str, new_name: str):
 
 def delete_project(job_id: str):
     conn = get_conn()
+    logger.debug(f"[DB] Delete project | job_id={job_id}")
     try:
         cursor = conn.cursor()
 
@@ -100,9 +105,13 @@ def delete_project(job_id: str):
 
         conn.commit()
         cursor.close()
+        logger.debug(f"[DB] Project deleted | job_id={job_id}")
 
     except Exception as e:
         conn.rollback()
+        logger.error(
+            f"[DB] Delete project failed | job_id={job_id} | error={str(e)}"
+        )
         raise
 
     finally:

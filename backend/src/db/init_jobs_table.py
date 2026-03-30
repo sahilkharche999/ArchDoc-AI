@@ -5,7 +5,7 @@ logger = setup_logger(__name__)
 
 
 def init_jobs_table():
-    logger.info("Initializing jobs table")
+    logger.debug("Initializing jobs table")
     conn = get_conn()
     try:
         cursor = conn.cursor()
@@ -20,7 +20,7 @@ def init_jobs_table():
         """)
         conn.commit()
         cursor.close()
-        logger.info("Jobs table ready (created or already exists)")
+        logger.debug("Jobs table ready (created or already exists)")
     except Exception as e:
         conn.rollback()
         logger.error(f"Failed to initialize jobs table | error={str(e)}")

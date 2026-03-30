@@ -42,7 +42,7 @@ class ConstructionGraph:
                 session.run(query)
             except Exception as e:
                 if "already exists" in str(e).lower():
-                    logger.info("Vector index definition_index already exists, skipping.")
+                    logger.debug("Vector index definition_index already exists, skipping.")
                 else:
                     raise
 
@@ -105,7 +105,7 @@ class ConstructionGraph:
             page_num,
             sheet_number
     ):
-        logger.info(
+        logger.debug(
     f"Adding schedule rule | project_id={project_id} | symbol={symbol} | schedule={schedule_name}"
 )
         """
@@ -156,7 +156,7 @@ class ConstructionGraph:
                     description=description,
                     vector=vector
                 )
-            logger.info(
+            logger.debug(
         f"Schedule rule added successfully | project_id={project_id} | symbol={symbol}"
     )
         except Exception as e:
@@ -240,7 +240,7 @@ class ConstructionGraph:
                         description=description,
                         vector=vector
                     )
-                logger.info(
+                logger.debug(
             f"Detail BOM added | project_id={project_id} | detail_key={detail_key}"
         )
                 return
@@ -267,7 +267,7 @@ class ConstructionGraph:
                 f"Embedding failed | project_id={project_id} | query={query_text} | error={str(e)}"
             )
             raise
-        logger.info(
+        logger.debug(
     f"Semantic search | project_id={project_id} | query={query_text} | limit={limit}"
 )
 

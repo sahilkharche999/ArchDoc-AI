@@ -5,7 +5,7 @@ logger = setup_logger(__name__)
 
 
 def update_job_status(job_id: str, status: str):
-    logger.info(f"Updating job status | job_id={job_id} | status={status}")
+    logger.debug(f"Updating job status | job_id={job_id} | status={status}")
     conn = get_conn()
     try:
         cursor = conn.cursor()
@@ -16,7 +16,7 @@ def update_job_status(job_id: str, status: str):
         """, (status, job_id))
         conn.commit()
         cursor.close()
-        logger.info(f"Job status updated successfully | job_id={job_id}")
+        logger.debug(f"Job status updated successfully | job_id={job_id}")
     except Exception as e:
         conn.rollback()
         logger.error(f"Failed to update job status | job_id={job_id} | error={str(e)}")
@@ -26,7 +26,7 @@ def update_job_status(job_id: str, status: str):
 
 
 def update_job_progress(job_id:str, status:str, step:str):
-    logger.info(f"Updating job | job_id={job_id} | status={status} ")
+    logger.debug(f"Updating job | job_id={job_id} | status={status} ")
     conn = get_conn()
     try:
         cursor = conn.cursor()
@@ -40,7 +40,7 @@ def update_job_progress(job_id:str, status:str, step:str):
         conn.commit()
         cursor.close()
 
-        logger.info(f"Job updated successfully | job_id={job_id}")
+        logger.debug(f"Job updated successfully | job_id={job_id}")
 
     except Exception as e:
         conn.rollback()
