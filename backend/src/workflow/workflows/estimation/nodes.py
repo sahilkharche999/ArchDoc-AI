@@ -33,7 +33,7 @@ from src.workflow.common.utils import (
 from src.infrastructure.graph_db import graph_db
 from src.infrastructure.symbol_detection import detect_and_read_symbols 
 from src.logger import setup_logger
-from src.db.update_jobs_status import update_job_status
+from src.db.update_jobs_status import update_job_status,update_job_progress
 
 logger = setup_logger(__name__)
 load_dotenv()
@@ -107,7 +107,7 @@ def node_process_text_rules(state: ProjectState):
         dict: Updated state with:
             - general_rules: Concatenated notes from all text pages processed
     """
-    logger.info("--- NODE: Processing Text Rules ---")
+    logger.info("--- NODE 1: Processing Text Rules ---")
     text_pages = [p for p, t in state["page_map"].items() if t == "text"]
     
     for page_num in text_pages:
@@ -446,7 +446,7 @@ def node_agent_4_merger(state: ProjectState,config):
     floor_images = state.get("floor_plan_images", [])
     
     # Load Excel Options
-    excel_path = "Steel Estimator.xlsx"
+    excel_path = "#1A Steel Estimator (2023).xlsx"
     valid_materials = get_valid_materials_list(excel_path)
     material_lookup = load_material_weights(excel_path)
     valid_materials_str = json.dumps(valid_materials)
@@ -486,11 +486,14 @@ def node_agent_4_merger(state: ProjectState,config):
             
             definition = None
             
-            if matches and matches[0]['score'] > 0.80:
-                definition = matches[0] # Use the full object
+            if matches :
+                score = matches[0].get("score")
+                logger.debug(f"Primary match score: {score}")
+                if isinstance(score, (int, float)) and score > 0.80:
+                   definition = matches[0]
                 
                 # B. Recursive Lookup (Detail Component -> Schedule)
-                if definition.get("BOM"):
+                if definition and definition.get("BOM"):
                     for item in definition["BOM"]:
                         # Check for "Schedule" or "See Plan" in rule/material
                         rule_text = item.get("qty_rule", "")
@@ -505,16 +508,22 @@ def node_agent_4_merger(state: ProjectState,config):
                             sub_matches = graph_db.semantic_search(mat_text, project_id,sheet_number=sheet_number, limit=1)
                             
                             if sub_matches:
-                                schedule_obj = sub_matches[0]
+                                sub_score = sub_matches[0].get("score")
+                                logger.debug(f"Schedule match score: {sub_score}")
+                                if isinstance(sub_score, (int, float)) and sub_score > 0.50:
+                                     schedule_obj = sub_matches[0]
+                                else:
+                                    schedule_obj = None
 
-                                item["linked_schedule_data"] = {
+                                if schedule_obj:         
+                                  item["linked_schedule_data"] = {
                                     "schedule_id": schedule_obj.get("ID"),
                                     "schedule_name": schedule_obj.get("Name"),
                                     "columns": schedule_obj.get("Columns"),
                                     "rows": schedule_obj.get("Rows"),
                                     "sheet": schedule_obj.get("Sheet")
                                 }
-
+                                  
                                 logger.info(f"      -> Found schedule: {schedule_obj.get('ID')}")
 
             # Attach the fully enriched definition to the symbol
@@ -544,9 +553,10 @@ def node_agent_4_merger(state: ProjectState,config):
             
             failed=True
     if failed :
-        update_job_status(job_id, "Failed")
+        update_job_status(job_id, "failed")
     else:
-        update_job_status(job_id, "Completed")
+        update_job_status(job_id, "completed")
+        update_job_progress(job_id, "completed", "agent_4_merger")
 
     return {"final_bill_of_materials": {"final_bill_of_materials": [item.model_dump() for item in all_extracted_items]}}   
 

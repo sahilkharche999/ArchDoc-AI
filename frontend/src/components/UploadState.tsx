@@ -3,6 +3,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Button } from "./ui/button";
 import { Upload, FileText, Check, } from "lucide-react";
 import { Input } from "./ui/input";
+import { Document, pdfjs } from "react-pdf";
+
+pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
 interface UploadStateProps {
   onStartProcessing: (jobId: string, filePath: string) => void;
@@ -13,6 +16,7 @@ export function UploadState({ onStartProcessing }: UploadStateProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [startPage, setStartPage] = useState<string>("");
   const [endPage, setEndPage] = useState<string>("");
+  const [numPages, setNumPages] = useState<number>();
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(true);
@@ -37,6 +41,11 @@ export function UploadState({ onStartProcessing }: UploadStateProps) {
       setFile(selectedFile);
     }
   };
+
+  function onDocumentLoadSuccess({ numPages }: { numPages: number }) {
+  setNumPages(numPages); 
+}
+
   const uploadFile = async () => {
   if (!file) return;
 
@@ -54,6 +63,7 @@ export function UploadState({ onStartProcessing }: UploadStateProps) {
 
   return data;
 };
+  
   return (
     <div className="flex items-center justify-center min-h-screen p-8">
       <Card className="w-full max-w-2xl">
@@ -88,6 +98,15 @@ export function UploadState({ onStartProcessing }: UploadStateProps) {
               htmlFor="file-upload"
               className="cursor-pointer flex flex-col items-center"
             >
+              {file && (
+  <div style={{ display: "none" }}>
+    <Document
+      file={file}
+      onLoadSuccess={onDocumentLoadSuccess}
+      onLoadError={(err) => console.error("PDF load error:", err)}
+    />
+  </div>
+)}
               {file ? (
                 <>
                   <FileText className="w-16 h-16 text-accent mb-4" />
@@ -116,6 +135,11 @@ export function UploadState({ onStartProcessing }: UploadStateProps) {
 
 
           {/* Processing Checklist */}
+          {numPages && (
+  <p className="text-sm text-muted-foreground">
+    Total Pages: 1 → {numPages}
+  </p>
+)}
           <div className="bg-muted/50 rounded-lg p-4">
             <p className="text-sm mb-3 text-muted-foreground">
               ENTER THE STARTING AND ENDING STRUCTURAL (S) PAGES NUMBERS:
@@ -155,13 +179,3 @@ export function UploadState({ onStartProcessing }: UploadStateProps) {
   );
 }
 
-function ChecklistItem({ label }: { label: string }) {
-  return (
-    <div className="flex items-center gap-2 text-sm">
-      <div className="w-4 h-4 rounded border border-border bg-background flex items-center justify-center">
-        {/* Empty checkbox - will be filled during processing */}
-      </div>
-      <span className="text-foreground">{label}</span>
-    </div>
-  );
-}

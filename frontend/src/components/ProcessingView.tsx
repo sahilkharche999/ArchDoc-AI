@@ -14,10 +14,11 @@ interface ProcessingViewProps {
 }
 
 const steps = [
-  { label: "Pages Classified", delay: 1000 },
-  { label: "Floor Plans Identified", delay: 2000 },
-  { label: "Structural Symbols Extracted", delay: 3000 },
-  { label: "Bill of Materials Generated", delay: 4000 },
+  { label: "Pages Classified" },              // classify
+  { label: "Text Rules Processed" },          // process_text
+  { label: "Floor Plans Identified" },        // process_plans
+  { label: "Details Extracted" },             // process_details
+  { label: "Bill of Materials Generated" }    // agent_4_merger
 ];
 
 export function ProcessingView({ jobId, filePath, onComplete, }: ProcessingViewProps) {
@@ -29,73 +30,53 @@ export function ProcessingView({ jobId, filePath, onComplete, }: ProcessingViewP
   function onDocumentLoadSuccess({ numPages }: { numPages: number }) {
     setNumPages(numPages);
   }
+
   useEffect(() => {
+  const interval = setInterval(async () => {
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects/${jobId}`);
+      const project = await res.json();
 
-    console.log("ProcessingView mounted");
-    console.log("filePath:", filePath);
-
-    const url = `${import.meta.env.VITE_API_URL}/api/v1/jobs/stream?job_id=${jobId}&file_path=${encodeURIComponent(filePath)}`;
-    console.log("Connecting to:", url);
-
-    const eventSource = new EventSource(url);
-
-    eventSource.onopen = () => {
-      console.log("Stream connected");
-    };
-
-    eventSource.onerror = (err) => {
-      console.error("Stream error:", err);
-    };
-
-    eventSource.onmessage = (event) => {
-
-      const data = JSON.parse(event.data);
-
-      console.log("Agent finished:", data.node);
+      const status = project.status?.toLowerCase();
+      const step = project.current_step;
 
       const nodeMap: Record<string, number> = {
-        classify: 0,
-        process_text: 1,
-        process_plans: 2,
-        agent_4_merger: 3
-      };
-
-      const stepIndex = nodeMap[data.node];
+  classify: 0,
+  process_text: 1,
+  process_plans: 2,
+  process_details: 3,
+  agent_4_merger: 4
+};
+      const normalizedStep = step?.toLowerCase().trim();
+      const stepIndex = nodeMap[normalizedStep];
 
       if (stepIndex !== undefined) {
-        setCompletedSteps(prev => [...prev, stepIndex]);
+        const completed = [];
+        for (let i = 0; i <= stepIndex; i++) {
+          completed.push(i);
+        }
+        setCompletedSteps(completed);
       }
 
-
-      if (data.node === "agent_4_merger") {
-
-        eventSource.close();
+      // ✅ COMPLETED → fetch result
+      if (status === "completed") {
+        clearInterval(interval);
 
         setLoadingResult(true);
 
-        fetch(`${import.meta.env.VITE_API_URL}/api/v1/jobs/${jobId}/result`)
-          .then(res => res.json())
-          .then(result => {
+        const resultRes = await fetch(`${import.meta.env.VITE_API_URL}/api/v1/jobs/${jobId}/result`);
+        const result = await resultRes.json();
 
-            console.log("BOM Result:", result);
-
-            // Pass data to dashboard
-            onComplete(result);
-
-          })
-          .catch(err => {
-            console.error("Failed to fetch result", err);
-          })
-          .finally(() => {
-            setLoadingResult(false);
-          });
+        onComplete(result);
       }
 
-    };
+    } catch (err) {
+      console.error("Polling error:", err);
+    }
+  }, 5000); // 🔥 every 5 sec
 
-    return () => eventSource.close();
-
-  }, [filePath, jobId]);
+  return () => clearInterval(interval);
+}, [jobId]);
 
   return (
     <div className="grid grid-cols-2 gap-6 h-full p-6">

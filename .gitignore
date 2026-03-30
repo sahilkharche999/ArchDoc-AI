@@ -18,3 +18,4 @@ checkpoints.sqlite
 *.sqlite-wal
 backend/.env
 frontend/.vite
+docker-compose-local.yml

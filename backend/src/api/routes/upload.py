@@ -5,7 +5,7 @@ from fastapi import APIRouter, UploadFile, File, Form
 from fastapi import HTTPException
 from pypdf import PdfReader, PdfWriter
 
-from src.db.create_job import create_job
+from src.db.create_job import create_job,create_job_progress
 from src.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -14,7 +14,7 @@ router = APIRouter(prefix="/upload", tags=["upload"])
 UPLOAD_DIR = "assets"
 
 
-@router.post("/")
+@router.post("")
 async def upload_file(
         file: UploadFile = File(...),
         start_page: int = Form(...),
@@ -49,6 +49,7 @@ async def upload_file(
 
     display_name = os.path.splitext(file.filename)[0]
     create_job(job_id, display_name)
+    create_job_progress(job_id)
 
     os.remove(file_path)
     return {

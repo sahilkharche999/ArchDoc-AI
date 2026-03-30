@@ -1,5 +1,5 @@
 import json
-
+import threading
 from fastapi import APIRouter
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
@@ -8,6 +8,13 @@ from src.logger import setup_logger
 from src.service import stream_estimation, app
 from src.workflow.common.utils import enrich_bom_with_pricing
 from src.workflow.common.utils import load_material_weights
+from src.db.update_jobs_status import update_job_progress
+from pydantic import BaseModel
+
+class StartJobRequest(BaseModel):
+    job_id: str
+    file_path: str
+
 
 logger = setup_logger(__name__)
 router = APIRouter()
@@ -75,3 +82,24 @@ def get_job_result(job_id: str):
         logger.exception(f"Failed to fetch result | job_id={job_id}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
+@router.post("/jobs/start")
+def start_job(request: StartJobRequest):
+    job_id = request.job_id
+    file_path = request.file_path
+    output_dir = f"output_temp/{job_id}"
+
+    def run():
+        try:
+            for thread_id, event in stream_estimation(job_id, file_path,output_dir ):
+                for node_name, state_update in event.items():
+                    update_job_progress(job_id, "processing", node_name)
+
+            # ✅ mark completed
+            update_job_progress(job_id, "completed", "agent_4_merger")
+
+        except Exception as e:
+            logger.error(f"Processing failed | job_id={job_id} | error={str(e)}")
+
+    threading.Thread(target=run).start()
+
+    return {"message": "started"}

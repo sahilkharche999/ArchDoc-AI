@@ -31,7 +31,7 @@ export function EstimationDashboard({ projectId = "1", bomData  }: EstimationDas
   const [editableBom, setEditableBom] = useState<BOMItem[]>(bomData);
   useEffect(() => {
   
-  fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects`)
+  fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects/`)
     .then(res => res.json())
     .then(data => {
       const project = data.projects.find((p:any) => p.job_id === projectId);

@@ -298,7 +298,7 @@ class ConstructionGraph:
                 qty_rule: r.qty_rule,
                 linked_schedule: rule.row
             }) as BOM,
-            score
+            coalesce(score, 0.0) as score
         """
         with self.driver.session() as session:
             result = session.run(

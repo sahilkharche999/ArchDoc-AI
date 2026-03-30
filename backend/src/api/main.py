@@ -4,7 +4,12 @@ from fastapi.staticfiles import StaticFiles
 import os
 from src.api.routes import upload, jobs, projects
 from src.db.init_jobs_table import init_jobs_table
+from src.db.init_job_progress_table import init_job_progress_table
 from src.logger import setup_logger
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 logger = setup_logger(__name__)
 app = FastAPI(
@@ -23,6 +28,7 @@ def startup():
 
     try:
         init_jobs_table()
+        init_job_progress_table()
         logger.info("Database initialized successfully")
 
     except Exception as e:
@@ -42,6 +48,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 try:
     app.mount("/api/v1/assets", StaticFiles(directory="assets"), name="assets")
     logger.info("Static files mounted | path=/api/v1/assets")
