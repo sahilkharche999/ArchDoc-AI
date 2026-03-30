@@ -3,7 +3,7 @@ import logging
 
 def setup_logger(name: str = "app_logger") -> logging.Logger:
     logger = logging.getLogger(name)
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
 
     if not logger.handlers:
         formatter = logging.Formatter(

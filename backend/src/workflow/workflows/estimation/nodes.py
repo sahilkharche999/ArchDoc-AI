@@ -446,7 +446,7 @@ def node_agent_4_merger(state: ProjectState,config):
     floor_images = state.get("floor_plan_images", [])
     
     # Load Excel Options
-    excel_path = "#1A Steel Estimator (2023).xlsx"
+    excel_path = "Steel Estimator.xlsx"
     valid_materials = get_valid_materials_list(excel_path)
     material_lookup = load_material_weights(excel_path)
     valid_materials_str = json.dumps(valid_materials)
