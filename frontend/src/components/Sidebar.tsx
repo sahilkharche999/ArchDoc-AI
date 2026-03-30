@@ -3,7 +3,7 @@ import { Button } from "./ui/button";
 import { FileText, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Project } from "../types/project";
-
+import logo from '../assets/dax_mfg_logo.jpeg'
 interface SidebarProps {
   onNewEstimation: () => void;
   selectedProjectId?: string;
@@ -15,7 +15,7 @@ export function Sidebar({ onNewEstimation, selectedProjectId, onSelectProject }:
   useEffect(() => {
 
   const fetchProjects = () => {
-    fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects`)
+    fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects/`)
       .then(res => res.json())
       .then(data => {
         setProjects(data.projects)
@@ -34,13 +34,47 @@ export function Sidebar({ onNewEstimation, selectedProjectId, onSelectProject }:
   return () => clearInterval(interval);
 
 }, [selectedProjectId]);
+
+ const renameProject = async (jobId: string, newName: string) => {
+  try {
+    await fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects/${jobId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ new_name: newName })
+    });
+
+    // refresh UI
+    setProjects(prev =>
+      prev.map(p =>
+        p.job_id === jobId ? { ...p, name: newName } : p
+      )
+    );
+
+  } catch (err) {
+    console.error("Rename failed", err);
+  }
+};
+
+const deleteProject = async (jobId: string) => {
+  try {
+    await fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects/${jobId}`, {
+      method: "DELETE"
+    });
+
+    setProjects(prev => prev.filter(p => p.job_id !== jobId));
+
+  } catch (err) {
+    console.error("Delete failed", err);
+  }
+};
+
   return (
     <div className="w-[260px] bg-sidebar text-sidebar-foreground h-screen flex flex-col border-r border-sidebar-border">
 
       <div className="p-6 border-b border-sidebar-border">
         <div className="flex items-center gap-3">
           <img
-            src="/assets/dax_mfg_logo.jpeg"
+            src={logo}
             alt="DAX Logo"
             className="w-8 h-8 rounded"
           />
@@ -60,6 +94,8 @@ export function Sidebar({ onNewEstimation, selectedProjectId, onSelectProject }:
               project={project}
               isSelected={project.job_id === selectedProjectId}
               onClick={() => onSelectProject?.(project.job_id)}
+              onRename={renameProject}
+              onDelete={deleteProject}
             />
           ))}
         </div>
@@ -82,12 +118,39 @@ export function Sidebar({ onNewEstimation, selectedProjectId, onSelectProject }:
 function ProjectItem({
   project,
   isSelected,
-  onClick
+  onClick,
+  onRename,
+  onDelete
 }: {
   project: Project;
   isSelected?: boolean;
   onClick?: () => void;
+  onRename?: (id: string, name: string) => void;
+  onDelete?: (id: string) => void;
+  
 }) {
+  const status = project.status?.toLowerCase();
+  const [isEditing, setIsEditing] = useState(false);
+  const [name, setName] = useState(project.name);
+   const handleRename = () => {
+    setIsEditing(false);
+    if (name.trim() && name !== project.name) {
+      onRename?.(project.job_id, name);
+    }
+  };
+
+  const formatDate = (dateStr?: string) => {
+  if (!dateStr) return "";
+
+  const date = new Date(dateStr);
+
+  return date.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+};
+
   return (
     <div
       className={`p-3 rounded-lg cursor-pointer transition-colors group ${isSelected ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/50"
@@ -95,19 +158,58 @@ function ProjectItem({
       onClick={onClick}
     >
       <div className="flex items-start justify-between mb-1">
-        <h3 className="text-sm text-white line-clamp-1">{project.name}</h3>
+         {isEditing ? (
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onBlur={handleRename}
+            onKeyDown={(e) => e.key === "Enter" && handleRename()}
+            className="text-sm bg-transparent border-b border-white outline-none text-white w-full"
+            autoFocus
+          />
+        ) : (
+          <h3 className="text-sm text-white line-clamp-1">
+            {project.name}
+          </h3>
+        )}
         <Badge
-          variant={project.status === "Completed" ? "secondary" : "default"}
+          variant={status === "completed" ? "secondary" : "default"}
           className={
-            project.status === "Completed"
-              ? "bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20 text-xs"
-              : "bg-accent/20 text-accent hover:bg-accent/20 text-xs"
+            status === "completed"
+              ? "bg-emerald-500/20 text-emerald-400 text-xs"
+              : "bg-accent/20 text-accent text-xs"
           }
         >
-          {project.status}
+          {status}
         </Badge>
+
       </div>
-      <p className="text-xs text-sidebar-foreground/60">{project.date}</p>
+      <p className="text-xs text-sidebar-foreground/60">{formatDate(project.date)}</p>
+        <div className="flex justify-between mt-2 opacity-100 transition" >
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setIsEditing(true);
+          }}
+          style={{cursor:'pointer'}}
+          className="text-sm px-2 py-1 rounded bg-blue-500/20 text-blue-400 hover:bg-blue-500/30"
+        >
+          Edit
+        </button>
+
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            if (confirm("Delete this project?")) {
+              onDelete?.(project.job_id);
+            }
+          }}
+           style={{cursor:'pointer'}}
+          className="text-sm px-2 py-1 rounded bg-red-500/20 text-red-400 hover:bg-red-500/30"
+        >
+          Delete
+        </button>
+      </div>
     </div>
   );
 }

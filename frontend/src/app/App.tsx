@@ -20,23 +20,38 @@ const handleSelectProject = async (jobId: string) => {
 
   try {
     const res = await fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects/${jobId}`);
-    console.log("Project status response:", res.status);
-
     const project = await res.json();
-    console.log("Project object:", project);
 
-    if (project.status === "Processing") {
+    console.log("RAW STATUS:", project.status);
+
+    const status = project.status?.trim().toLowerCase();
+    console.log("NORMALIZED:", status);
+
+    // 🔴 PROCESSING
+    if (status === "processing") {
       setJobId(jobId);
       setFilePath(project.file_path);
+      setBomData([]);
       setAppState("processing");
       return;
     }
 
-    const resultRes = await fetch(`${import.meta.env.VITE_API_URL}/api/v1/jobs/${jobId}/result`);
-    const data = await resultRes.json();
+    // 🔵 COMPLETED
+    if (status === "completed") {
+      const resultRes = await fetch(`${import.meta.env.VITE_API_URL}/api/v1/jobs/${jobId}/result`);
 
-    setBomData(data.bom || []);
-    setAppState("dashboard");
+      if (!resultRes.ok) {
+        console.warn("Result not available");
+        setAppState("dashboard");
+        setBomData([]);
+        return;
+      }
+
+      const data = await resultRes.json();
+
+      setBomData(data.bom || []);
+      setAppState("dashboard");
+    }
 
   } catch (err) {
     console.error("Failed to fetch project", err);
@@ -48,11 +63,21 @@ const handleSelectProject = async (jobId: string) => {
     setAppState("upload");
   };
 
-  const handleStartProcessing = (jobId: string, filePath: string) => {
+  const handleStartProcessing =async (jobId: string, filePath: string) => {
   setSelectedProjectId(jobId);
   setJobId(jobId);
   setFilePath(filePath);
   setAppState("processing");
+  await fetch(`${import.meta.env.VITE_API_URL}/api/v1/jobs/start`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify({
+    job_id: jobId,
+    file_path: filePath
+  })
+});
 };
 
   const handleProcessingComplete = (result: any) => {

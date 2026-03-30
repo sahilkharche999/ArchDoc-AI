@@ -8,7 +8,6 @@ load_dotenv()
 
 _pool: psycopg2.pool.ThreadedConnectionPool | None = None
 
-
 def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     global _pool
     if _pool is None:

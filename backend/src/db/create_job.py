@@ -18,8 +18,31 @@ def create_job(job_id: str, file_name: str):
             job_id,
             file_name,
             file_name,
-            "Processing",
+            "processing",
             datetime.now().strftime("%Y-%m-%d")
+        ))
+        conn.commit()
+        cursor.close()
+        logger.info(f"Job created successfully | job_id={job_id}")
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Failed to create job | job_id={job_id} | error={str(e)}")
+        raise
+    finally:
+        release_conn(conn)
+
+def create_job_progress(job_id: str):
+    logger.info(f"Creating job progress table | job_id={job_id} ")
+    conn = get_conn()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO jobs_progress (job_id, status, current_state)
+            VALUES (%s, %s, %s)
+        """, (
+            job_id,
+            "processing",
+            "classify"
         ))
         conn.commit()
         cursor.close()

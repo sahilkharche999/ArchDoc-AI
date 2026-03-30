@@ -40,3 +40,70 @@ def get_projects_by_id(job_id: str):
         raise
     finally:
         release_conn(conn)
+
+
+def get_job_progress(job_id: str):
+    logger.info(f"Fetching project from jobs_progress DB with ID: {job_id}")
+    conn = get_conn()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM jobs_progress WHERE job_id = %s", (job_id,))
+        row = cursor.fetchone()
+        cursor.close()
+        logger.info(f"Project fetched successfully | job_id={job_id}")
+        return row
+    except Exception as e:
+        logger.error(f"Failed to fetch project | job_id={job_id} | error={str(e)}")
+        raise
+    finally:
+        release_conn(conn)
+
+
+
+
+
+def update_project(job_id: str, new_name: str):
+    conn = get_conn()
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            UPDATE jobs
+            SET name = %s
+            WHERE job_id = %s
+        """, (new_name,job_id))
+
+        conn.commit()
+        cursor.close()
+
+    except Exception as e:
+        conn.rollback()
+        raise
+
+    finally:
+        release_conn(conn)
+
+
+def delete_project(job_id: str):
+    conn = get_conn()
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "DELETE FROM jobs WHERE job_id = %s",
+            (job_id,)
+        )
+        cursor.execute(
+            "DELETE FROM jobs_progress WHERE job_id = %s",
+            (job_id,)
+        )
+
+        conn.commit()
+        cursor.close()
+
+    except Exception as e:
+        conn.rollback()
+        raise
+
+    finally:
+        release_conn(conn)
