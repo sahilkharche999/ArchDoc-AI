@@ -32,7 +32,7 @@ def _load_model():
         logger.info("Loading Grounding DINO model...")
         _processor = AutoProcessor.from_pretrained(DINO_MODEL_ID)
         _model = AutoModelForZeroShotObjectDetection.from_pretrained(DINO_MODEL_ID).to(DEVICE)
-        logger.info("Grounding DINO model loaded.")
+        logger.debug("Grounding DINO model loaded.")
 
 
 def clean_output(text: str) -> str:
@@ -61,7 +61,7 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
     3. Uses Gemini to read the text inside.
     """
     _load_model()
-    logger.info(
+    logger.debug(
         f"Symbol detection started | image={os.path.basename(image_path)} | output_dir={output_dir}"
     )
     try:

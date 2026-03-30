@@ -21,7 +21,7 @@ async def upload_file(
         end_page: int = Form(...)
 ):
     os.makedirs(UPLOAD_DIR, exist_ok=True)
-    logger.info(
+    logger.debug(
         f"Upload request received | filename={file.filename} | start={start_page} | end={end_page}"
     )
 

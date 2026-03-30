@@ -77,11 +77,14 @@ def node_classify_pages(state: ProjectState):
             {"type": "text", "text": prompt},
             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}}
         ])
-
-        result = llm_flash.with_structured_output(DrawingTypeResponse).invoke([msg])
+        try:
+            result = llm_flash.with_structured_output(DrawingTypeResponse).invoke([msg])
+        except Exception as e:
+            logger.error(f"Failed to classify page {page_num} | error={str(e)}")
+            raise
         page_map[page_num] = result.drawing_type
-        logger.info(f"Page Index {page_num}: {result.drawing_type}")
-
+        logger.debug(f"Page Index {page_num}: {result.drawing_type}")
+    logger.info(f"Page classification completed | total_pages={total_pages}")
     return {"page_map": page_map}
 
 
@@ -112,6 +115,7 @@ def node_process_text_rules(state: ProjectState):
     
     for page_num in text_pages:
         # 1. Extract Single Page PDF
+        logger.debug(f"[Page {page_num}] Start processing")
         page_pdf_path = f"{state['output_dir']}/notes_{page_num}.pdf"
         try:
             reader = PdfReader(state["pdf_path"])
@@ -120,10 +124,10 @@ def node_process_text_rules(state: ProjectState):
             with open(page_pdf_path, "wb") as f: writer.write(f)
         except Exception as e:
             logger.error(f"PDF extraction failed: {e}")
-            continue
+            raise
 
         # 2. Run MinerU (Assuming this function works and saves to the path below)
-        logger.info(f"   > Running MinerU on Page {page_num}...")
+        logger.debug(f"   > Running MinerU on Page {page_num}...")
         minerU_pdf_creating_extration(page_pdf_path, state["output_dir"],"pipeline")
 
         # 3. Read the Markdown File
@@ -138,7 +142,7 @@ def node_process_text_rules(state: ProjectState):
             continue
 
         # 4. The Advanced Prompt
-        logger.info("   > Calling LLM to parse Rules...")
+        logger.debug("   > Calling LLM to parse Rules...")
         
         prompt=prompt_node_process_text_rules(markdown_content)
 
@@ -146,7 +150,7 @@ def node_process_text_rules(state: ProjectState):
         
         try:
             result = llm_flash.with_structured_output(TextRulesExtraction).invoke([msg])
-            logger.info(f"LLM OUTPUT: {result}")
+
             # Store Rules in Graph
             for section in result.sections:
                 section_name = section.section_name
@@ -157,7 +161,7 @@ def node_process_text_rules(state: ProjectState):
                         rule_number=rule.rule_number,
                         text=rule.text
                     )
-                    logger.info( f"   > Graph: Added Rule {rule.rule_number} in section '{section_name}'")
+                    logger.debug( f"   > Graph: Added Rule {rule.rule_number} in section '{section_name}'")
             
             # Store General Notes in State (Memory)
             if result.general_notes:
@@ -166,6 +170,7 @@ def node_process_text_rules(state: ProjectState):
 
         except Exception as e:
             logger.exception(f"Failed to parse text rules on page {page_num}: {e}")
+            raise
                 
     return {"general_rules": state["general_rules"]}
 
@@ -202,7 +207,7 @@ def node_process_plans(state: ProjectState):
     floor_pages = [p for p, t in state["page_map"].items() if t == "floor"]
     
     for page_num in floor_pages:
-        logger.info(f"Ingesting Page {page_num}...")
+        logger.debug(f"Ingesting Page {page_num}...")
         
         # 1. Setup Paths
         page_dir = f"{state['output_dir']}/floor_{page_num}"
@@ -229,12 +234,12 @@ def node_process_plans(state: ProjectState):
             continue
 
         # 3. Run MinerU (VLM Backend)
-        logger.info(f"   > Running MinerU (VLM) on Page {page_num}...")
+        logger.debug(f"   > Running MinerU (VLM) on Page {page_num}...")
         minerU_pdf_creating_extration(page_pdf_path, mineru_output_dir, "vlm-auto-engine")
 
         # 4. Run Union Cropping (Title + Table Merge)
         if os.path.exists(json_path):
-            logger.info(f"   > Running Union Cropping...")
+            logger.debug(f"   > Running Union Cropping...")
             # This creates UNION crops in 'images_dir' and deletes old ones
             crop_union_tables(json_path, page_img_path, output_dir=images_dir)
         else:
@@ -243,7 +248,7 @@ def node_process_plans(state: ProjectState):
         # 5. PROCESS CROPS (Ingest Schedules, Identify Plans)
         if os.path.exists(images_dir):
             image_files = [f for f in os.listdir(images_dir) if f.endswith(('.jpg', '.png'))]
-            logger.info(f"   > Found {len(image_files)} crops to analyze.")
+            logger.debug(f"   > Found {len(image_files)} crops to analyze.")
             
             for img_file in image_files:
                 crop_path = os.path.join(images_dir, img_file)
@@ -260,10 +265,9 @@ def node_process_plans(state: ProjectState):
                     
                     # CASE A: It is a Schedule/Note -> Store in Graph
                     if result.type == "Schedule":
-                        logger.info(f"     > Ingested Schedule: {result.title}")
+                        logger.debug(f"     > Ingested Schedule: {result.title}")
                         rows = result.rows or []
-                        logger.info(f" > Found {len(rows)} rows.")
-                        logger.info(f"     > Found {len(result.rows)} rows.")
+                        logger.debug(f" > Found {len(rows)} rows.")
 
                         columns = result.columns or []
 
@@ -294,7 +298,7 @@ def node_process_plans(state: ProjectState):
 
                     # CASE B: It is a Plan View -> Save for Agent 5
                     elif result.type == "Plan_View":
-                        logger.info(f"     > Found Floor Plan Crop: {img_file}")
+                        logger.debug(f"     > Found Floor Plan Crop: {img_file}")
                         floor_plan_images.append({
                             "path": crop_path,
                             "sheet": sheet_number
@@ -337,9 +341,9 @@ def node_process_details(state: ProjectState):
     logger.info("--- NODE 3 : Processing Section Details (MinerU) ---")
     detail_library = state.get("detail_library", {})
     section_pages = [p for p, t in state["page_map"].items() if t == "section"]
-    logger.info(f"Length of the section page : {len(section_pages)}")
+    logger.debug(f"Length of the section page : {len(section_pages)}")
     for page_num in section_pages:
-        logger.info(f"Processing Page {page_num}...")
+        logger.debug(f"Processing Page {page_num}...")
         
         # 1. Setup Paths
         page_img_path = f"{state['output_dir']}/section_page_{page_num}.png"
@@ -354,15 +358,15 @@ def node_process_details(state: ProjectState):
             writer.add_page(reader.pages[page_num])
             with open(page_pdf_path, "wb") as f: writer.write(f)
         except Exception as e:
-            logger.info(f"PDF extraction failed: {e}")
+            logger.error(f"PDF extraction failed: {e}")
             continue
 
         # 3. Extract Sheet Number
         sheet_number = get_sheet_number(page_img_path)
-        logger.info(f"   > Identified Sheet Number: {sheet_number}")
+        logger.debug(f"   > Identified Sheet Number: {sheet_number}")
 
         # 4. Run MinerU 
-        logger.info(f"   > Running MinerU on Page {page_num}...")
+        logger.debug(f"   > Running MinerU on Page {page_num}...")
         minerU_pdf_creating_extration(page_pdf_path, state["output_dir"],"pipeline")
 
         # 5. Prepare MinerU Data. 
@@ -371,7 +375,7 @@ def node_process_details(state: ProjectState):
         json_path = f"{mineru_base_dir}/section_page_{page_num}_content_list.json"
         images_dir = f"{mineru_base_dir}/images"
 
-        logger.info("   > Step 1: Mapping Layout...")
+        logger.debug("   > Step 1: Mapping Layout...")
         if not os.path.exists(layout_pdf_path) or not os.path.exists(json_path):
             logger.warning(
     f"MinerU output missing for page {page_num}. "
@@ -385,7 +389,7 @@ def node_process_details(state: ProjectState):
             continue
 
    
-        logger.info(f"   > Step 2: Extracting {len(detail_groups)} details...") 
+        logger.debug(f"   > Step 2: Extracting {len(detail_groups)} details...") 
         
         for group in detail_groups:
                 # Call the extractor for this specific group
@@ -446,7 +450,7 @@ def node_agent_4_merger(state: ProjectState,config):
     floor_images = state.get("floor_plan_images", [])
     
     # Load Excel Options
-    excel_path = "Steel Estimator.xlsx"
+    excel_path = os.getenv("EXCEL_PATH", "Steel Estimator.xlsx")
     valid_materials = get_valid_materials_list(excel_path)
     material_lookup = load_material_weights(excel_path)
     valid_materials_str = json.dumps(valid_materials)
@@ -460,17 +464,19 @@ def node_agent_4_merger(state: ProjectState,config):
     for img in floor_images:
         img_path = img["path"]
         sheet_number = img["sheet"]
-        if not os.path.exists(img_path): continue
+        if not os.path.exists(img_path): 
+            logger.warning(f"[Image {img_path}] File not found, skipping")
+            continue
         
         filename = os.path.basename(img_path)
-        logger.info(f"  > Processing Image: {filename}")
+        logger.debug(f"  > Processing Image: {filename}")
 
         # 1. Run Symbol Detection (DINO + Groq)
         symbol_out_dir = os.path.join(os.path.dirname(img_path), "detected_symbols")
         try:
             raw_symbols = detect_and_read_symbols(img_path, symbol_out_dir)
             raw_symbols = [s for s in raw_symbols if s.get("text_content") != "Unknown"]
-            logger.info(f"Here is the Raw symbol we detectd : {raw_symbols}")
+            logger.debug(f"Here is the Raw symbol we detectd : {raw_symbols}")
         except Exception as e:
             logger.error(f"    ! Symbol detection failed: {e}")
             raw_symbols = []
@@ -501,7 +507,7 @@ def node_agent_4_merger(state: ProjectState,config):
                         schedule_keywords = ["schedule", "see plan", "see sched", "per schedule"]
                         text_blob = f"{rule_text} {mat_text}".lower()
                         if any(k in text_blob for k in schedule_keywords):
-                            logger.info(f"    > Resolving Reference: {mat_text}")
+                            logger.debug(f"    > Resolving Reference: {mat_text}")
                             
                             # Search for the Schedule (Filter by Label="Schedule" if possible)
                             # Using the material name as the query (e.g. "LOOSE LINTEL")
@@ -524,12 +530,12 @@ def node_agent_4_merger(state: ProjectState,config):
                                     "sheet": schedule_obj.get("Sheet")
                                 }
                                   
-                                logger.info(f"      -> Found schedule: {schedule_obj.get('ID')}")
+                                logger.debug(f"      -> Found schedule: {schedule_obj.get('ID')}")
 
             # Attach the fully enriched definition to the symbol
             sym['linked_definition'] = definition
             enriched_symbols.append(sym)
-        logger.info(f"    > Enriched {len(enriched_symbols)} symbols with Graph Data.")
+        logger.debug(f"    > Enriched {len(enriched_symbols)} symbols with Graph Data.")
 
         # 3. ONE-SHOT PROMPT (No ReAct Loop needed anymore!
         system_prompt =prompt_for_agent_4_merger(json.dumps(enriched_symbols, indent=2),valid_materials_str,sheet_number)
@@ -545,7 +551,7 @@ def node_agent_4_merger(state: ProjectState,config):
             result = llm_pro.with_structured_output(FinalEstimation).invoke([msg])
             
             if result.final_bill_of_materials:
-                logger.info(f"    > Extracted {len(result.final_bill_of_materials)} items.")
+                logger.debug(f"    > Extracted {len(result.final_bill_of_materials)} items.")
                 all_extracted_items.extend(result.final_bill_of_materials)
                   
         except Exception as e:

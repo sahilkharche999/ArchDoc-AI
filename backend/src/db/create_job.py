@@ -7,7 +7,7 @@ logger = setup_logger(__name__)
 
 
 def create_job(job_id: str, file_name: str):
-    logger.info(f"Creating job | job_id={job_id} | file_name={file_name}")
+    logger.debug(f"Creating job | job_id={job_id} | file_name={file_name}")
     conn = get_conn()
     try:
         cursor = conn.cursor()
@@ -23,7 +23,7 @@ def create_job(job_id: str, file_name: str):
         ))
         conn.commit()
         cursor.close()
-        logger.info(f"Job created successfully | job_id={job_id}")
+        logger.debug(f"Job created successfully | job_id={job_id}")
     except Exception as e:
         conn.rollback()
         logger.error(f"Failed to create job | job_id={job_id} | error={str(e)}")
@@ -32,7 +32,7 @@ def create_job(job_id: str, file_name: str):
         release_conn(conn)
 
 def create_job_progress(job_id: str):
-    logger.info(f"Creating job progress table | job_id={job_id} ")
+    logger.debug(f"Creating job progress table | job_id={job_id} ")
     conn = get_conn()
     try:
         cursor = conn.cursor()
@@ -46,7 +46,7 @@ def create_job_progress(job_id: str):
         ))
         conn.commit()
         cursor.close()
-        logger.info(f"Job created successfully | job_id={job_id}")
+        logger.debug(f"Job created successfully | job_id={job_id}")
     except Exception as e:
         conn.rollback()
         logger.error(f"Failed to create job | job_id={job_id} | error={str(e)}")

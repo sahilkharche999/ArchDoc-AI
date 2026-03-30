@@ -30,21 +30,26 @@ def map_page_layout(pdf_layout_path: str, json_path: str, images_dir: str):
     Returns a list of DetailGroup objects.
     Used in Process Plan agent
     """
-    logger.info(f"   > Mapping Layout for {pdf_layout_path}...")
-
+    logger.debug(f"[Layout] Mapping started | pdf={pdf_layout_path}")
+    try:
     # 1. Load Context
-    with open(json_path, 'r') as f:
-        json_data = json.load(f)
-        # Simplify JSON for prompt (just types and bboxes)
-        simple_json = [{"id": i, "type": x["type"], "bbox": x.get("bbox"), "text_preview": x.get("text", "")[:50]} for
-                       i, x in enumerate(json_data)]
-        json_string = json.dumps(simple_json, indent=2)
+        with open(json_path, 'r') as f:
+            json_data = json.load(f)
+            # Simplify JSON for prompt (just types and bboxes)
+            simple_json = [{"id": i, "type": x["type"], "bbox": x.get("bbox"), "text_preview": x.get("text", "")[:50]} for
+                        i, x in enumerate(json_data)]
+            json_string = json.dumps(simple_json, indent=2)
+    except Exception as e:
+        logger.error(f"[Layout] Failed to load JSON | path={json_path} | error={str(e)}")
+        return []
+
 
     # 2. Convert Layout PDF to Image
     try:
         layout_images = convert_from_path(pdf_layout_path)
         layout_image_b64 = image_to_base64(layout_images[0])
     except:
+        logger.error(f"[Layout] PDF to image conversion failed | path={pdf_layout_path} | error={str(e)}")
         return []
 
     # 3. Prompt
@@ -78,9 +83,10 @@ def map_page_layout(pdf_layout_path: str, json_path: str, images_dir: str):
     try:
         # Use Flash for layout mapping (it's fast and good at spatial grouping)
         result = llm_flash.with_structured_output(DetailMap).invoke([msg])
+        logger.debug(f"[Layout] Mapping success | groups={len(result.groups)}")
         return result.groups
     except Exception as e:
-        logger.error(f"   ! Mapping failed: {e}")
+        logger.error(f"[Layout] Mapping failed | error={str(e)}")
         return []
 
 
@@ -89,7 +95,7 @@ def extract_single_detail(group: DetailGroup, images_dir: str):
     Analyzes a SINGLE detail group (specific images + text) to get the BOM.
     Used in the Floor plan agent 
     """
-    logger.info(f"   > Extracting BOM for {group.detail_id}...")
+    logger.debug(f"   > Extracting BOM for {group.detail_id}...")
 
     payload = []
 
@@ -140,6 +146,7 @@ def crop_union_tables(json_path, image_path, output_dir="debug_crops"):
     which make sure healing and content comes in crop
     """
     os.makedirs(output_dir, exist_ok=True)
+    logger.debug(f"[Crop] Start union cropping | image={image_path}")
 
     if not os.path.exists(image_path):
         logger.error(f"Error: Image not found at {image_path}")
@@ -147,7 +154,7 @@ def crop_union_tables(json_path, image_path, output_dir="debug_crops"):
 
     full_img = Image.open(image_path)
     img_w, img_h = full_img.size
-    logger.info(f"Loaded Image: {img_w}x{img_h}")
+    logger.debug(f"Loaded Image: {img_w}x{img_h}")
 
     with open(json_path, 'r') as f:
         content_list = json.load(f)
@@ -167,7 +174,7 @@ def crop_union_tables(json_path, image_path, output_dir="debug_crops"):
     scale_x = img_w / max_json_x
     scale_y = img_h / max_json_y
 
-    logger.info(f"Detected Scale Factor: X={scale_x:.2f}, Y={scale_y:.2f}")
+    logger.debug(f"Detected Scale Factor: X={scale_x:.2f}, Y={scale_y:.2f}")
 
     processed_indices = set()
 
@@ -186,10 +193,11 @@ def crop_union_tables(json_path, image_path, output_dir="debug_crops"):
             try:
                 title_text = item["content"]["title_content"][0]["content"]
                 safe_title = "".join(x for x in title_text if x.isalnum() or x == " ")[:30].strip()
-            except:
+            except Exception as e:
+                logger.warning(f"[Crop] Failed to extract title text | index={i} | error={str(e)}")
                 safe_title = f"Title_{i}"
 
-            logger.info(f"Checking Title: '{safe_title}'...")
+            logger.debug(f"Checking Title: '{safe_title}'...")
 
             # 2. Search for the Body (Spatial Search)
             best_match_idx = -1
@@ -226,7 +234,7 @@ def crop_union_tables(json_path, image_path, output_dir="debug_crops"):
             if best_match_idx != -1:
                 body_item = content_list[best_match_idx]
                 body_bbox = body_item["bbox"]
-                logger.info(f"  -> MATCH! Found '{body_item['type']}' below (Gap: {min_gap:.1f})")
+                logger.debug(f"  -> MATCH! Found '{body_item['type']}' below (Gap: {min_gap:.1f})")
 
                 # Calculate Union Box
                 union_x1 = min(bbox[0], body_bbox[0]) - 60  # Padding for Symbol
@@ -253,21 +261,14 @@ def crop_union_tables(json_path, image_path, output_dir="debug_crops"):
                     crop_img = full_img.crop(crop_box)
                     save_path = os.path.join(output_dir, f"UNION_{safe_title}.png")
                     crop_img.save(save_path)
-                    logger.info(f"  -> Saved Union Crop: {save_path}")
+                    logger.debug(f"  -> Saved Union Crop: {save_path}")
 
                     # Mark both as processed
                     processed_indices.add(i)
                     processed_indices.add(best_match_idx)
 
-                    # OPTIONAL: Delete the old MinerU image if it exists
-                    try:
-                        old_path = body_item["content"]["image_source"]["path"]
-                        # Construct full path and delete...
-                    except:
-                        pass
-
                 except Exception as e:
-                    logger.error(f"  ! Crop Failed: {e}")
+                    logger.error(f"[Crop] Crop failed | title={safe_title} | error={str(e)}")
 
         # 4. If it's a Table/List that wasn't merged (Orphan)
         elif item_type in ["table", "list"] and i not in processed_indices:
@@ -284,7 +285,7 @@ def convert_specific_page_to_png(pdf_path, page_num, output_image_path, dpi=300)
             page = doc.load_page(page_num)
             pix = page.get_pixmap(dpi=dpi)
             pix.save(output_image_path)
-            logger.info(f"Successfully converted page {page_num} to {output_image_path}")
+            logger.debug(f"Successfully converted page {page_num} to {output_image_path}")
         else:
             logger.error(f"Error: Page number {page_num} is out of range.")
         doc.close()
@@ -317,8 +318,9 @@ def get_valid_materials_list(excel_path):
     try:
         df = pd.read_excel(excel_path, sheet_name="Options")
         return df.iloc[:, 0].dropna().astype(str).tolist()
-    except:
-        return []
+    except Exception as e:
+        logger.error(f"Failed to read Excel file: {excel_path} | error={str(e)}")
+        raise
 
 
 def load_image_base64(image_path: str) -> str:
