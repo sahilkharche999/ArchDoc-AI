@@ -5,7 +5,7 @@ logger = setup_logger(__name__)
 
 
 def get_projects():
-    logger.info("Fetching projects from DB")
+    logger.debug("Fetching projects from DB")
     conn = get_conn()
     try:
         cursor = conn.cursor()
@@ -16,7 +16,7 @@ def get_projects():
         """)
         rows = cursor.fetchall()
         cursor.close()
-        logger.info(f"Projects fetched successfully | count={len(rows)}")
+        logger.debug(f"Projects fetched successfully | count={len(rows)}")
         return rows
     except Exception as e:
         logger.error(f"Failed to fetch projects | error={str(e)}")
@@ -26,14 +26,14 @@ def get_projects():
 
 
 def get_projects_by_id(job_id: str):
-    logger.info(f"Fetching project from DB with ID: {job_id}")
+    logger.debug(f"Fetching project from DB with ID: {job_id}")
     conn = get_conn()
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM jobs WHERE job_id = %s", (job_id,))
         row = cursor.fetchone()
         cursor.close()
-        logger.info(f"Project fetched successfully | job_id={job_id}")
+        logger.debug(f"Project fetched successfully | job_id={job_id}")
         return row
     except Exception as e:
         logger.error(f"Failed to fetch project | job_id={job_id} | error={str(e)}")
@@ -43,14 +43,14 @@ def get_projects_by_id(job_id: str):
 
 
 def get_job_progress(job_id: str):
-    logger.info(f"Fetching project from jobs_progress DB with ID: {job_id}")
+    logger.debug(f"Fetching project from jobs_progress DB with ID: {job_id}")
     conn = get_conn()
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM jobs_progress WHERE job_id = %s", (job_id,))
         row = cursor.fetchone()
         cursor.close()
-        logger.info(f"Project fetched successfully | job_id={job_id}")
+        logger.debug(f"Project fetched successfully | job_id={job_id}")
         return row
     except Exception as e:
         logger.error(f"Failed to fetch project | job_id={job_id} | error={str(e)}")
