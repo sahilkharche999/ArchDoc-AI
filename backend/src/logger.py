@@ -9,7 +9,7 @@ def setup_logger(logger_name: str) -> logging.Logger:
     Returns a logger that writes to the mounted EC2 host filesystem.
     Assumes the host path is bind-mounted at /var/log/myapp inside the container.
     """
-    log_dir = os.getenv("LOG_DIR", "/var/logs/dax")
+    log_dir = os.getenv("LOG_DIR", "/var/log/dax")
     os.makedirs(log_dir, exist_ok=True)
 
     now = datetime.now(ZoneInfo('Asia/Kolkata'))
