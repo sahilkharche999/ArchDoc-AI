@@ -101,7 +101,6 @@ export function ProcessingView({ jobId, filePath, onComplete, }: ProcessingViewP
               <Page pageNumber={pageNumber} width={500} />
             </Document>
           </div>
-          assets/586e916c-5628-45da-81ca-889ed5cf1e66_structural.pdf
           <div className="flex justify-between items-center mt-4">
             <button
               onClick={() => setPageNumber(p => Math.max(p - 1, 1))}

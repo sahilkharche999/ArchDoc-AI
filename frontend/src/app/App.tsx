@@ -67,6 +67,42 @@ const handleSelectProject = async (jobId: string|null) => {
   }
 };
 
+
+ const renameProject = async (jobId: string, newName: string) => {
+  try {
+    await fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects/${jobId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ new_name: newName })
+    });
+
+    // refresh UI
+    setProjects(prev =>
+      prev.map(p =>
+        p.job_id === jobId ? { ...p, name: newName } : p
+      )
+    );
+
+  } catch (err) {
+    console.error("Rename failed", err);
+  }
+};
+
+const deleteProject = async (jobId: string) => {
+  try {
+    await fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects/${jobId}`, {
+      method: "DELETE"
+    });
+
+    setProjects(prev => prev.filter(p => p.job_id !== jobId));
+
+  } catch (err) {
+    console.error("Delete failed", err);
+  }
+};
+
+
+
 const handleNewEstimation = () => {
     setAppState("upload");
     setSelectedProjectId(null);
@@ -128,15 +164,18 @@ if (isStarting) {
   );
 }
 
-if (projects.length === 0) {
-  return <Intro onStart={handleNewEstimation} />
-}
-
 if (appState === "upload") {
   return (
     <UploadState onStartProcessing={handleStartProcessing} />
   )
 }
+
+
+if (projects.length === 0 && appState === "dashboard") {
+  return <Intro onStart={handleNewEstimation} />
+}
+
+
 
 if (!selectedProjectId) {
   return (
@@ -145,6 +184,8 @@ if (!selectedProjectId) {
       search={search}
       setSearch={setSearch}
       onSelect={handleSelectProject}
+      onRename={renameProject}
+      onDelete={deleteProject}
     />
   )
 }
@@ -162,7 +203,7 @@ if (!selectedProjectId) {
         />
 
         {/* Main Content */}
-
+  <div className="flex-1 overflow-auto">
           {appState === "processing" && jobId && filePath && (
   <ProcessingView
     jobId={jobId}
@@ -176,6 +217,7 @@ if (!selectedProjectId) {
     bomData={bomData}
   />
 )}
+</div>
         </div>
         
     </>

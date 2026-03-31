@@ -26,8 +26,12 @@ export function Intro({ onStart }: { onStart: () => void }) {
           </p>
 
           {/* CTA BUTTON 🔥 */}
-          <Button size="lg" onClick={onStart}>
+          <Button size="lg"   onClick={() => {
+    console.log("CLICKED ✅");
+    onStart();
+  }}>
             + Start New Estimation
+      
           </Button>
 
           {/* Instructions */}
