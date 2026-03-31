@@ -69,6 +69,11 @@ def node_classify_pages(state: ProjectState):
     for page_num in range(total_pages):
         temp_img_path = f"{state['output_dir']}/temp_page_{page_num}.png"
         convert_specific_page_to_png(pdf_path, page_num, temp_img_path, dpi=150)
+        sheet_number = get_sheet_number(temp_img_path)
+        if sheet_number[0]!='S':
+            logger.info(f"Skipping non-structural page and deleting image | sheet_number={sheet_number} | path={temp_img_path}")
+            os.remove(temp_img_path)
+            continue
 
         prompt=prompt_for_node_classify_pages()
 
