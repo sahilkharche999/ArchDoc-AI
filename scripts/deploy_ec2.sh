@@ -35,7 +35,7 @@ fi
 echo ""
 echo "[1/6] Installing system dependencies..."
 yum update -y -q
-yum install -y \
+yum install -y --allowerasing \
   nginx \
   python3.11 python3.11-pip \
   nodejs npm \
