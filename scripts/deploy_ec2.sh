@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # =============================================================================
-# DAX EC2 Deployment Script
-# Usage: bash scripts/deploy_ec2.sh
+# DAX EC2 Deployment Script (Amazon Linux)
+# Usage: sudo bash scripts/deploy_ec2.sh
 # Run from the root of the cloned repository.
 # =============================================================================
 
@@ -13,7 +13,7 @@ FRONTEND_DIR="$ROOT_DIR/frontend"
 DEPLOY_DIR="/opt/dax"
 WEB_DIR="/var/www/dax"
 ASSETS_DIR="/data/assets"
-SERVICE_USER="${SUDO_USER:-ubuntu}"
+SERVICE_USER="${SUDO_USER:-ec2-user}"
 
 echo "============================================="
 echo " DAX EC2 Deployment"
@@ -34,15 +34,15 @@ fi
 # -----------------------------------------------------------------------------
 echo ""
 echo "[1/6] Installing system dependencies..."
-apt-get update -qq
-apt-get install -y --no-install-recommends \
+yum update -y -q
+yum install -y \
   nginx \
-  python3.11 python3.11-venv python3-pip \
+  python3.11 python3.11-pip \
   nodejs npm \
   poppler-utils \
-  libgl1 libglib2.0-0 \
-  libfreetype-dev libffi-dev libjpeg-dev zlib1g-dev \
-  curl wget gnupg
+  mesa-libGL glib2 \
+  freetype-devel libffi-devel libjpeg-devel zlib-devel \
+  curl wget rsync
 echo "      Done."
 
 # -----------------------------------------------------------------------------
@@ -51,10 +51,10 @@ echo "      Done."
 echo ""
 echo "[2/6] Installing Memgraph..."
 if ! systemctl is-active --quiet memgraph 2>/dev/null; then
-  MEMGRAPH_DEB="memgraph_2.20.0-1_amd64.deb"
-  wget -q "https://download.memgraph.com/memgraph/v2.20.0/ubuntu-22.04/$MEMGRAPH_DEB" -O /tmp/$MEMGRAPH_DEB
-  dpkg -i /tmp/$MEMGRAPH_DEB
-  rm /tmp/$MEMGRAPH_DEB
+  MEMGRAPH_RPM="memgraph-2.20.0_1-1.x86_64.rpm"
+  wget -q "https://download.memgraph.com/memgraph/v2.20.0/amzn-2/$MEMGRAPH_RPM" -O /tmp/$MEMGRAPH_RPM
+  yum install -y /tmp/$MEMGRAPH_RPM
+  rm /tmp/$MEMGRAPH_RPM
   systemctl enable --now memgraph
   echo "      Memgraph installed and started."
 else
@@ -125,7 +125,6 @@ echo "      Backend service started."
 # -----------------------------------------------------------------------------
 echo ""
 echo "[4/6] Building and deploying frontend..."
-cd "$FRONTEND_DIR"
 sudo -u "$SERVICE_USER" bash -c "
   cd $FRONTEND_DIR
   npm install --silent
@@ -141,7 +140,7 @@ if [[ -d "$FRONTEND_DIR/public/assets" ]]; then
   cp -r "$FRONTEND_DIR/public/assets/." "$WEB_DIR/assets/"
 fi
 
-chown -R www-data:www-data "$WEB_DIR"
+chown -R nginx:nginx "$WEB_DIR"
 echo "      Frontend built and copied to $WEB_DIR."
 
 # -----------------------------------------------------------------------------
@@ -149,7 +148,7 @@ echo "      Frontend built and copied to $WEB_DIR."
 # -----------------------------------------------------------------------------
 echo ""
 echo "[5/6] Configuring Nginx..."
-cat > /etc/nginx/sites-available/dax <<'EOF'
+cat > /etc/nginx/conf.d/dax.conf <<'EOF'
 server {
     listen 80;
 
@@ -175,8 +174,8 @@ server {
 }
 EOF
 
-ln -sf /etc/nginx/sites-available/dax /etc/nginx/sites-enabled/dax
-rm -f /etc/nginx/sites-enabled/default
+# Remove default server block if present
+rm -f /etc/nginx/conf.d/default.conf
 
 nginx -t
 systemctl enable nginx
