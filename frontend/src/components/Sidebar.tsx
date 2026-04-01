@@ -6,7 +6,7 @@ import { Project } from "../types/project";
 import logo from '../assets/dax_mfg_logo.jpeg'
 interface SidebarProps {
   onNewEstimation: () => void;
-  selectedProjectId?: string;
+  selectedProjectId?: string|null;
   onSelectProject?: (id: string) => void;
 }
 

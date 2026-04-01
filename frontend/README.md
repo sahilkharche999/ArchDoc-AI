@@ -46,7 +46,6 @@ src
  │   ├── DashboardHeader.tsx
  │   ├── EditableCell.tsx
  │   ├── EstimationDashboard.tsx
- │   ├── NotificationProvider.tsx
  │   ├── ProcessingView.tsx
  │   ├── Sidebar.tsx
  │   ├── SummaryTab.tsx

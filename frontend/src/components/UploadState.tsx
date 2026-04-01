@@ -152,8 +152,10 @@ export function UploadState({ onStartProcessing }: UploadStateProps) {
 
                     {/* Action Button */}
           <Button
-            onClick={async () => {
+            onClick={
+              async () => {
             const result = await uploadFile();
+            console.log("UPLOAD RESULT 👉", result);
             if (result) {
               console.log(result)
               onStartProcessing(result.job_id, result.file_path);
