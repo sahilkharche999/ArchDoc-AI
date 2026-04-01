@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # =============================================================================
-# DAX EC2 Deployment Script (Amazon Linux)
+# DAX EC2 Deployment Script (Amazon Linux 2023)
 # Usage: sudo bash scripts/deploy_ec2.sh
 # Run from the root of the cloned repository.
 # =============================================================================
@@ -16,16 +16,16 @@ ASSETS_DIR="/data/assets"
 SERVICE_USER="${SUDO_USER:-ec2-user}"
 
 echo "============================================="
-echo " DAX EC2 Deployment"
-echo " Root: $ROOT_DIR"
-echo " User: $SERVICE_USER"
+echo " DAX EC2 Deployment (Amazon Linux 2023)"
+echo " Root:  $ROOT_DIR"
+echo " User:  $SERVICE_USER"
 echo "============================================="
 
 # -----------------------------------------------------------------------------
 # 0. Must run as root
 # -----------------------------------------------------------------------------
 if [[ $EUID -ne 0 ]]; then
-  echo "ERROR: Run this script with sudo: sudo bash scripts/deploy_ec2.sh"
+  echo "ERROR: Run with sudo: sudo bash scripts/deploy_ec2.sh"
   exit 1
 fi
 
@@ -34,31 +34,62 @@ fi
 # -----------------------------------------------------------------------------
 echo ""
 echo "[1/6] Installing system dependencies..."
+
 yum update -y -q
+
+# Core packages
 yum install -y --allowerasing \
   nginx \
-  python3.11 python3.11-pip \
-  nodejs npm \
+  python3.11 python3.11-devel \
   poppler-utils \
   mesa-libGL glib2 \
-  freetype-devel libffi-devel libjpeg-devel zlib-devel \
-  curl wget rsync
-echo "      Done."
+  freetype-devel libffi-devel libjpeg-turbo-devel zlib-devel \
+  wget rsync curl
+
+# Bootstrap pip for python3.11 (python3.11-pip is not a yum package on AL2023)
+python3.11 -m ensurepip --upgrade
+python3.11 -m pip install --quiet --upgrade pip
+
+# Node.js 20 LTS via NodeSource (AL2023 repo may ship older Node)
+if ! node --version 2>/dev/null | grep -qE '^v(18|19|20|21|22)'; then
+  echo "      Installing Node.js 20 LTS..."
+  curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+  yum install -y nodejs
+fi
+
+echo "      System deps done. Node: $(node --version)  Python: $(python3.11 --version)"
 
 # -----------------------------------------------------------------------------
 # 2. Memgraph
 # -----------------------------------------------------------------------------
 echo ""
 echo "[2/6] Installing Memgraph..."
-if ! systemctl is-active --quiet memgraph 2>/dev/null; then
+
+if systemctl is-active --quiet memgraph 2>/dev/null; then
+  echo "      Memgraph already running, skipping."
+else
   MEMGRAPH_RPM="memgraph-2.20.0_1-1.x86_64.rpm"
-  wget -q "https://download.memgraph.com/memgraph/v2.20.0/amzn-2/$MEMGRAPH_RPM" -O /tmp/$MEMGRAPH_RPM
+  MEMGRAPH_DOWNLOADED=0
+
+  for DISTRO in amzn-2023 amzn-2; do
+    MEMGRAPH_URL="https://download.memgraph.com/memgraph/v2.20.0/$DISTRO/$MEMGRAPH_RPM"
+    echo "      Trying: $MEMGRAPH_URL"
+    if wget -q "$MEMGRAPH_URL" -O /tmp/$MEMGRAPH_RPM 2>/dev/null; then
+      MEMGRAPH_DOWNLOADED=1
+      break
+    fi
+  done
+
+  if [[ $MEMGRAPH_DOWNLOADED -eq 0 ]]; then
+    echo "ERROR: Could not download Memgraph RPM for Amazon Linux."
+    echo "       Manually download from https://memgraph.com/download and re-run."
+    exit 1
+  fi
+
   yum install -y /tmp/$MEMGRAPH_RPM
-  rm /tmp/$MEMGRAPH_RPM
+  rm -f /tmp/$MEMGRAPH_RPM
   systemctl enable --now memgraph
   echo "      Memgraph installed and started."
-else
-  echo "      Memgraph already running, skipping."
 fi
 
 # -----------------------------------------------------------------------------
@@ -67,32 +98,32 @@ fi
 echo ""
 echo "[3/6] Deploying backend..."
 
-# Validate .env exists
 if [[ ! -f "$BACKEND_DIR/.env" ]]; then
-  echo "ERROR: backend/.env not found. Create it before running this script."
+  echo "ERROR: backend/.env not found. Fill it in before running this script."
   exit 1
 fi
 
-# Copy code
+# Copy code to deploy dir
 mkdir -p "$DEPLOY_DIR"
 rsync -a --delete "$BACKEND_DIR/" "$DEPLOY_DIR/backend/"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$DEPLOY_DIR"
 
-# Assets directory
+# Assets directory on host disk
 mkdir -p "$ASSETS_DIR"
 chown "$SERVICE_USER:$SERVICE_USER" "$ASSETS_DIR"
 
-# Python virtualenv
-echo "      Setting up Python virtualenv..."
-sudo -u "$SERVICE_USER" bash -c "
-  cd $DEPLOY_DIR/backend
+# Python virtualenv + deps
+echo "      Setting up Python virtualenv (this may take a few minutes)..."
+sudo -u "$SERVICE_USER" bash <<VENV
+  set -e
+  cd "$DEPLOY_DIR/backend"
   python3.11 -m venv venv
   source venv/bin/activate
   pip install --quiet --upgrade pip
   pip install --quiet torch torchvision --index-url https://download.pytorch.org/whl/cpu
   pip install --quiet -r requirements-ml.txt
   pip install --quiet -r requirements.txt
-"
+VENV
 echo "      Python deps installed."
 
 # Systemd service
@@ -125,30 +156,32 @@ echo "      Backend service started."
 # -----------------------------------------------------------------------------
 echo ""
 echo "[4/6] Building and deploying frontend..."
-sudo -u "$SERVICE_USER" bash -c "
-  cd $FRONTEND_DIR
+
+sudo -u "$SERVICE_USER" bash <<BUILD
+  set -e
+  cd "$FRONTEND_DIR"
   npm install --silent
   npm run build
-"
+BUILD
 
 mkdir -p "$WEB_DIR"
 cp -r "$FRONTEND_DIR/dist/." "$WEB_DIR/"
 
-# Copy public/assets (logo etc.) if present
 if [[ -d "$FRONTEND_DIR/public/assets" ]]; then
   mkdir -p "$WEB_DIR/assets"
   cp -r "$FRONTEND_DIR/public/assets/." "$WEB_DIR/assets/"
 fi
 
 chown -R nginx:nginx "$WEB_DIR"
-echo "      Frontend built and copied to $WEB_DIR."
+echo "      Frontend built and deployed to $WEB_DIR."
 
 # -----------------------------------------------------------------------------
 # 5. Nginx
 # -----------------------------------------------------------------------------
 echo ""
 echo "[5/6] Configuring Nginx..."
-cat > /etc/nginx/conf.d/dax.conf <<'EOF'
+
+cat > /etc/nginx/conf.d/dax.conf <<'NGINXCONF'
 server {
     listen 80;
 
@@ -172,9 +205,8 @@ server {
         try_files $uri $uri/ /index.html;
     }
 }
-EOF
+NGINXCONF
 
-# Remove default server block if present
 rm -f /etc/nginx/conf.d/default.conf
 
 nginx -t
@@ -183,16 +215,16 @@ systemctl restart nginx
 echo "      Nginx configured and restarted."
 
 # -----------------------------------------------------------------------------
-# 6. Health check
+# 6. Health checks
 # -----------------------------------------------------------------------------
 echo ""
 echo "[6/6] Running health checks..."
 sleep 3
 
 BACKEND_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health || echo "000")
-NGINX_STATUS=$(systemctl is-active nginx)
-MEMGRAPH_STATUS=$(systemctl is-active memgraph)
-BACKEND_STATUS=$(systemctl is-active dax-backend)
+NGINX_STATUS=$(systemctl is-active nginx || echo "inactive")
+MEMGRAPH_STATUS=$(systemctl is-active memgraph || echo "inactive")
+BACKEND_STATUS=$(systemctl is-active dax-backend || echo "inactive")
 
 echo ""
 echo "============================================="
