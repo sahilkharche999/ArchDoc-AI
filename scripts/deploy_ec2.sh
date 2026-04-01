@@ -51,9 +51,10 @@ yum install -y --allowerasing \
 python3.11 -m ensurepip --upgrade
 python3.11 -m pip install --quiet --upgrade pip
 
-# Node.js 20 LTS via NodeSource (AL2023 repo may ship older Node)
-if ! node --version 2>/dev/null | grep -qE '^v(18|19|20|21|22)'; then
-  echo "      Installing Node.js 20 LTS..."
+# Node.js 20 LTS via NodeSource (requires >= 20 for pdfjs-dist and react-router)
+NODE_MAJOR=$(node --version 2>/dev/null | grep -oE '[0-9]+' | head -1 || echo "0")
+if [[ "$NODE_MAJOR" -lt 20 ]]; then
+  echo "      Node $NODE_MAJOR detected — upgrading to Node 20 LTS..."
   curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
   yum install -y nodejs
 fi
@@ -146,6 +147,9 @@ echo "      Backend service started."
 # -----------------------------------------------------------------------------
 echo ""
 echo "[4/6] Building and deploying frontend..."
+
+# Ensure ec2-user owns the frontend source dir so npm can write node_modules
+chown -R "$SERVICE_USER:$SERVICE_USER" "$FRONTEND_DIR"
 
 sudo -u "$SERVICE_USER" bash <<BUILD
   set -euo pipefail
