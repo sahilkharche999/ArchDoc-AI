@@ -9,7 +9,7 @@ psycopg[pool]
 langgraph==1.1.2
 neo4j==6.1.0
 openpyxl
-pandas==3.0.1
+pandas>=2.3.3,<3
 pdf2image==1.17.0
 pdfplumber==0.11.9
 Pillow==12.1.1

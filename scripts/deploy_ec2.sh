@@ -148,9 +148,10 @@ echo ""
 echo "[4/6] Building and deploying frontend..."
 
 sudo -u "$SERVICE_USER" bash <<BUILD
-  set -e
+  set -euo pipefail
   cd "$FRONTEND_DIR"
-  npm install --silent
+  echo "      Node: \$(node --version)  npm: \$(npm --version)"
+  npm install
   npm run build
 BUILD
 
