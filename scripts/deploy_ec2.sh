@@ -41,6 +41,7 @@ yum update -y -q
 yum install -y --allowerasing \
   nginx \
   python3.11 python3.11-devel \
+  docker \
   poppler-utils \
   mesa-libGL glib2 \
   freetype-devel libffi-devel libjpeg-turbo-devel zlib-devel \
@@ -60,36 +61,25 @@ fi
 echo "      System deps done. Node: $(node --version)  Python: $(python3.11 --version)"
 
 # -----------------------------------------------------------------------------
-# 2. Memgraph
+# 2. Memgraph (Docker container)
 # -----------------------------------------------------------------------------
 echo ""
-echo "[2/6] Installing Memgraph..."
+echo "[2/6] Starting Memgraph via Docker..."
 
-if systemctl is-active --quiet memgraph 2>/dev/null; then
-  echo "      Memgraph already running, skipping."
+systemctl enable --now docker
+usermod -aG docker "$SERVICE_USER"
+
+if docker ps --filter "name=dax-memgraph" --format '{{.Names}}' | grep -q dax-memgraph; then
+  echo "      Memgraph container already running, skipping."
 else
-  MEMGRAPH_RPM="memgraph-2.20.0_1-1.x86_64.rpm"
-  MEMGRAPH_DOWNLOADED=0
-
-  for DISTRO in amzn-2023 amzn-2; do
-    MEMGRAPH_URL="https://download.memgraph.com/memgraph/v2.20.0/$DISTRO/$MEMGRAPH_RPM"
-    echo "      Trying: $MEMGRAPH_URL"
-    if wget -q "$MEMGRAPH_URL" -O /tmp/$MEMGRAPH_RPM 2>/dev/null; then
-      MEMGRAPH_DOWNLOADED=1
-      break
-    fi
-  done
-
-  if [[ $MEMGRAPH_DOWNLOADED -eq 0 ]]; then
-    echo "ERROR: Could not download Memgraph RPM for Amazon Linux."
-    echo "       Manually download from https://memgraph.com/download and re-run."
-    exit 1
-  fi
-
-  yum install -y /tmp/$MEMGRAPH_RPM
-  rm -f /tmp/$MEMGRAPH_RPM
-  systemctl enable --now memgraph
-  echo "      Memgraph installed and started."
+  docker rm -f dax-memgraph 2>/dev/null || true
+  docker run -d \
+    --name dax-memgraph \
+    --restart always \
+    -p 7687:7687 \
+    -p 3000:3000 \
+    memgraph/memgraph:latest
+  echo "      Memgraph container started."
 fi
 
 # -----------------------------------------------------------------------------
@@ -223,8 +213,8 @@ sleep 3
 
 BACKEND_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health || echo "000")
 NGINX_STATUS=$(systemctl is-active nginx || echo "inactive")
-MEMGRAPH_STATUS=$(systemctl is-active memgraph || echo "inactive")
 BACKEND_STATUS=$(systemctl is-active dax-backend || echo "inactive")
+MEMGRAPH_STATUS=$(docker ps --filter "name=dax-memgraph" --format '{{.Status}}' 2>/dev/null || echo "unknown")
 
 echo ""
 echo "============================================="
