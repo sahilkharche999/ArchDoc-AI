@@ -103,6 +103,10 @@ chown -R "$SERVICE_USER:$SERVICE_USER" "$DEPLOY_DIR"
 mkdir -p "$ASSETS_DIR"
 chown "$SERVICE_USER:$SERVICE_USER" "$ASSETS_DIR"
 
+# Log directory — must be writable by the service user
+mkdir -p /var/log/dax
+chown "$SERVICE_USER:$SERVICE_USER" /var/log/dax
+
 # Python virtualenv + deps
 echo "      Setting up Python virtualenv (this may take a few minutes)..."
 sudo -u "$SERVICE_USER" bash <<VENV
