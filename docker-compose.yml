@@ -27,3 +27,5 @@ services:
     ports:
       - "7687:7687"
       - "3000:3000"
+  redis:
+    image: redis:7
