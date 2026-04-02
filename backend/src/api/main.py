@@ -7,7 +7,7 @@ from src.db.init_jobs_table import init_jobs_table
 from src.db.init_job_progress_table import init_job_progress_table
 from src.logger import setup_logger
 from dotenv import load_dotenv
-import os
+from src.redis_conn import connect_redis
 
 load_dotenv()
 
@@ -29,6 +29,7 @@ def startup():
     try:
         init_jobs_table()
         init_job_progress_table()
+        connect_redis()
         logger.info("Database initialized successfully")
 
     except Exception as e:

@@ -41,7 +41,7 @@ def create_job_progress(job_id: str):
             VALUES (%s, %s, %s)
         """, (
             job_id,
-            "processing",
+            "pending",
             "classify"
         ))
         conn.commit()
