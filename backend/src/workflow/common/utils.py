@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import subprocess
+import sys
 from io import BytesIO
 
 import fitz
@@ -295,9 +296,8 @@ def convert_specific_page_to_png(pdf_path, page_num, output_image_path, dpi=300)
 
 def minerU_pdf_creating_extration(pdf_path: str, output_dir: str, backend_type: str):
     os.makedirs(output_dir, exist_ok=True)
-    python_bin = os.getenv("PYTHON_BIN", "python3")
     cmd = [
-        python_bin, "-m", "mineru",   
+        sys.executable, "-m", "mineru",   
         "--path", pdf_path,
         "--output", output_dir,
         "--method", "auto",
