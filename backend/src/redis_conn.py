@@ -1,9 +1,12 @@
 import redis
+
 from src.logger import setup_logger
 
 redis_client = None
 logger = setup_logger(__name__)
-def connect_redis(host='redis', port=6379):
+
+
+def connect_redis(host, port):
     global redis_client
 
     redis_client = redis.StrictRedis(

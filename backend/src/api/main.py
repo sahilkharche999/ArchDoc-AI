@@ -29,7 +29,7 @@ def startup():
     try:
         init_jobs_table()
         init_job_progress_table()
-        connect_redis()
+        connect_redis(os.getenv('REDIS_HOST', 'localhost'), int(os.getenv('REDIS_PORT', 6379)))
         logger.info("Database initialized successfully")
 
     except Exception as e:
