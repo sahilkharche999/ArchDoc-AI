@@ -51,7 +51,8 @@ app.add_middleware(
 )
 
 try:
-    app.mount("/api/v1/assets", StaticFiles(directory="assets"), name="assets")
+    assets_dir = os.getenv("ASSETS_DIR", "/data/assets")
+    app.mount("/api/v1/assets", StaticFiles(directory=assets_dir), name="assets")
     logger.info("Static files mounted | path=/api/v1/assets")
 
 except Exception as e:
