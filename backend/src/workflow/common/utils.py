@@ -296,8 +296,9 @@ def convert_specific_page_to_png(pdf_path, page_num, output_image_path, dpi=300)
 
 def minerU_pdf_creating_extration(pdf_path: str, output_dir: str, backend_type: str):
     os.makedirs(output_dir, exist_ok=True)
+    mineru_bin = os.path.join(os.path.dirname(sys.executable), "mineru")
     cmd = [
-        sys.executable, "-m", "mineru",   
+        mineru_bin,   
         "--path", pdf_path,
         "--output", output_dir,
         "--method", "auto",
