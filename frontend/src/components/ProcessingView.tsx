@@ -26,11 +26,44 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
     const [loadingResult, setLoadingResult] = useState(false);
     const [numPages, setNumPages] = useState<number>();
     const [pageNumber, setPageNumber] = useState(1);
-    const pdfFileObject = useMemo(() => ({url: `${import.meta.env.VITE_API_URL}/api/v1/${filePath}`}), [filePath]);
+    const [isPdfReady, setIsPdfReady] = useState(false);
+    
 
+    
     function onDocumentLoadSuccess({numPages}: { numPages: number }) {
         setNumPages(numPages);
     }
+    function normalizePath(path: string) {
+  return path
+    .replace(/^\/+/, "")      // remove leading /
+    .replace(/^data\//, "");  // remove data/
+}
+    
+    const pdfFileObject = useMemo(() => ({url: `${import.meta.env.VITE_API_URL}/api/v1/${normalizePath(filePath)}`}), [filePath]);
+    
+
+  useEffect(() => {
+  if (!filePath) return;
+  console.log("filePath 👉", filePath);
+  const checkFile = async () => {
+    try {
+        const cleanPath = normalizePath(filePath)
+        const url = `${import.meta.env.VITE_API_URL}/api/v1/${cleanPath}`
+      const res = await fetch(url,{ method: "HEAD" } 
+);
+
+      if (res.ok) {
+        setIsPdfReady(true);
+      } else {
+        setTimeout(checkFile, 1000);
+      }
+    } catch {
+      setTimeout(checkFile, 1000);
+    }
+  };
+
+  checkFile();
+}, [filePath]);
 
     useEffect(() => {
         if (!jobId) return;
@@ -104,13 +137,21 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
                 <CardContent className="p-4 h-full flex flex-col">
 
                     <div className="flex-1 overflow-auto flex justify-center">
-                        <Document
-                            file={pdfFileObject}
-                            onLoadSuccess={onDocumentLoadSuccess}
-                            onLoadError={(err) => console.error("PDF load error:", err)}
-                        >
-                            <Page pageNumber={pageNumber} width={500}/>
-                        </Document>
+                       {!isPdfReady ? (
+                              <div className="flex items-center justify-center h-full">
+                                <Loader2 className="w-10 h-10 animate-spin" />
+                                <p>Loading PDF...</p>
+                              </div>
+                            ) : (
+                              <Document
+                                file={pdfFileObject}
+                                onLoadSuccess={onDocumentLoadSuccess}
+                                onLoadError={(err) => console.error("PDF load error:", err)}
+                              >
+                                <Page pageNumber={pageNumber} width={500} />
+                              </Document>
+                                )
+                        }
                     </div>
                     <div className="flex justify-between items-center mt-4">
                         <button
