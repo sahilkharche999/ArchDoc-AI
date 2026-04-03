@@ -7,7 +7,6 @@ import {Intro} from '../components/Intro';
 import {ProjectGrid} from '../components/ProjectGrid';
 import {Project} from "../types/project";
 
-
 type AppState = "upload" | "processing" | "dashboard";
 
 export default function App() {
@@ -136,9 +135,8 @@ export default function App() {
 
     const fetchProjects = async () => {
         try {
-            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects`);
+            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects/`);
             const data = await res.json();
-            console.log("PROJECT API RESPONSE:", data);
             setProjects(data.projects);
         } catch (err) {
             console.error("Failed to fetch projects", err);

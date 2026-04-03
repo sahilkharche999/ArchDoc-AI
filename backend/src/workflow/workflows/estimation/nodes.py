@@ -57,7 +57,7 @@ def node_classify_pages(state: ProjectState):
         - "floor": If the page shows a Plan View, Foundation Plan, or Roof Framing Plan.
         - "section": If the page shows Detail Drawings, Wall Sections, or Connection Cuts.
     """
-    logger.info("--- NODE 1 : Classifying Pages ---")
+    logger.info("--- NODE 0 : Classifying Pages ---")
     pdf_path = state["pdf_path"]
     output_dir=state['output_dir']
     os.makedirs(output_dir, exist_ok=True)
