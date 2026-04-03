@@ -1,4 +1,4 @@
-import {useState, useEffect} from "react";
+import {useEffect, useState} from "react";
 import {Sidebar} from "../components/Sidebar";
 import {UploadState} from "../components/UploadState";
 import {ProcessingView} from "../components/ProcessingView";
