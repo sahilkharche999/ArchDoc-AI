@@ -299,13 +299,13 @@ def minerU_pdf_creating_extration(pdf_path: str, output_dir: str, backend_type: 
     mineru_bin = os.path.join(os.path.dirname(sys.executable), "mineru")
     cmd = [
         mineru_bin,   
-        "--path", pdf_path,
-        "--output", output_dir,
-        "--method", "auto",
-        "--lang", "en",
-        "--table", "true",
-        "--formula", "false",
-        "--backend", backend_type
+        "-p", pdf_path,
+        "-o", output_dir,
+        "-m", "auto",
+        "-l", "en",
+        "-t", "true",
+        "-f", "false",
+        "-b", backend_type
     ]
 
     subprocess.run(cmd, check=True)
