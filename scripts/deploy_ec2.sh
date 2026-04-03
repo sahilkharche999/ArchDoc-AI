@@ -65,7 +65,7 @@ echo "      System deps done. Node: $(node --version)  Python: $(python3.11 --ve
 # 2. Memgraph (Docker container)
 # -----------------------------------------------------------------------------
 echo ""
-echo "[2/6] Starting Memgraph via Docker..."
+echo "[2/7] Starting Memgraph via Docker..."
 
 systemctl enable --now docker
 usermod -aG docker "$SERVICE_USER"
@@ -84,10 +84,31 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# 3. Backend
+# 3. Redis (Docker container)
 # -----------------------------------------------------------------------------
 echo ""
-echo "[3/6] Deploying backend..."
+echo "[3/7] Starting Redis via Docker..."
+
+if docker ps --filter "name=dax-redis" --format '{{.Names}}' | grep -q dax-redis; then
+  echo "      Redis container already running, skipping."
+else
+  mkdir -p /data/redis
+  chown "$SERVICE_USER:$SERVICE_USER" /data/redis
+  docker rm -f dax-redis 2>/dev/null || true
+  docker run -d \
+    --name dax-redis \
+    --restart always \
+    -p 127.0.0.1:6379:6379 \
+    -v /data/redis:/data \
+    redis:7-alpine
+  echo "      Redis container started on 127.0.0.1:6379 (data: /data/redis)."
+fi
+
+# -----------------------------------------------------------------------------
+# 4. Backend
+# -----------------------------------------------------------------------------
+echo ""
+echo "[4/7] Deploying backend..."
 
 if [[ ! -f "$BACKEND_DIR/.env" ]]; then
   echo "ERROR: backend/.env not found. Fill it in before running this script."
@@ -150,7 +171,7 @@ echo "      Backend service started."
 # 4. Frontend
 # -----------------------------------------------------------------------------
 echo ""
-echo "[4/6] Building and deploying frontend..."
+echo "[5/7] Building and deploying frontend..."
 
 # Ensure ec2-user owns the frontend source dir so npm can write node_modules
 chown -R "$SERVICE_USER:$SERVICE_USER" "$FRONTEND_DIR"
@@ -178,7 +199,7 @@ echo "      Frontend built and deployed to $WEB_DIR."
 # 5. Nginx
 # -----------------------------------------------------------------------------
 echo ""
-echo "[5/6] Configuring Nginx..."
+echo "[6/7] Configuring Nginx..."
 
 cat > /etc/nginx/conf.d/dax.conf <<'NGINXCONF'
 server {
@@ -217,13 +238,14 @@ echo "      Nginx configured and restarted."
 # 6. Health checks
 # -----------------------------------------------------------------------------
 echo ""
-echo "[6/6] Running health checks..."
+echo "[7/7] Running health checks..."
 sleep 3
 
 BACKEND_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health || echo "000")
 NGINX_STATUS=$(systemctl is-active nginx || echo "inactive")
 BACKEND_STATUS=$(systemctl is-active dax-backend || echo "inactive")
 MEMGRAPH_STATUS=$(docker ps --filter "name=dax-memgraph" --format '{{.Status}}' 2>/dev/null || echo "unknown")
+REDIS_STATUS=$(docker ps --filter "name=dax-redis" --format '{{.Status}}' 2>/dev/null || echo "unknown")
 
 echo ""
 echo "============================================="
@@ -232,6 +254,7 @@ echo "============================================="
 echo "  Nginx:     $NGINX_STATUS"
 echo "  Backend:   $BACKEND_STATUS  (HTTP /health → $BACKEND_HEALTH)"
 echo "  Memgraph:  $MEMGRAPH_STATUS"
+echo "  Redis:     $REDIS_STATUS"
 echo "============================================="
 
 if [[ "$BACKEND_HEALTH" != "200" ]]; then
