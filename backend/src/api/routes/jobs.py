@@ -4,12 +4,13 @@ import threading
 from fastapi import APIRouter
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
-
+import src.redis_conn as redis_conn
 from src.logger import setup_logger
 from src.service import stream_estimation, app
 from src.workflow.common.utils import enrich_bom_with_pricing
 from src.workflow.common.utils import load_material_weights
 from src.db.update_jobs_status import update_job_progress
+from src.db.get_projects import get_job_progress
 from pydantic import BaseModel
 from dotenv import load_dotenv
 load_dotenv()
@@ -24,41 +25,35 @@ router = APIRouter()
 EXCEL_PATH = os.getenv("EXCEL_PATH", "Steel Estimator.xlsx")
 MATERIAL_LOOKUP = load_material_weights(EXCEL_PATH)
 
+def event_generator(job_id:str):
 
-def event_generator(job_id, file_path):
-    logger.debug(f"Event stream started | job_id={job_id} | file={file_path}")
-    if not job_id:
-      raise HTTPException(status_code=400, detail="Invalid job_id")
+    logger.debug(f"Event stream started | job_id={job_id} ")
+    progress = get_job_progress(job_id)
+    if progress:
+        payload = {
+            "step": progress[2],
+            "status": progress[1]
+        }
+        yield f"data: {json.dumps(payload)}\n\n"
+
+    pubsub = redis_conn.redis_client.pubsub()
+    pubsub.subscribe(job_id)
+
     try:
-        for thread_id, event in stream_estimation(job_id, file_path, "output_temp"):
-            for node_name, state_update in event.items():
-                logger.debug(f"Node update | job_id={job_id} | node={node_name}")
-                payload = {
-                    "node": node_name
-                }
-                yield f"data: {json.dumps(payload)}\n\n"
-        logger.debug(f"Event stream completed | job_id={job_id}")
+        for message in pubsub.listen():
+            if message["type"] != "message":
+                continue
+            data = json.loads(message["data"])
+            yield f"data: {json.dumps(data)}\n\n"
+            if data.get("status") == "completed":
+                break
     except Exception as e:
-         logger.error(f"Event stream failed | job_id={job_id} | error={str(e)}")
-         error_payload = {
-        "error": "Something went wrong",
-        "details": str(e)
-          }
-         yield f"data: {json.dumps(error_payload)}\n\n"
+        logger.error(f"SSE error | job_id={job_id} | error={str(e)}")
+    finally:
+        pubsub.close()
+        logger.debug(f"Event stream closed | job_id={job_id}")
 
 
-
-@router.get("/jobs/stream")
-def stream_job(job_id: str, file_path: str):
-    logger.debug(f"Stream request received | job_id={job_id} | file={file_path}")
-    if not job_id:
-        logger.error("Stream failed | reason=missing_job_id")
-        raise HTTPException(status_code=400, detail="job_id required")
-    logger.debug(f"Streaming workflow for job {job_id}")
-    return StreamingResponse(
-        event_generator(job_id, file_path),
-        media_type="text/event-stream"
-    )
 
 
 @router.get("/jobs/{job_id}/result")
@@ -87,19 +82,47 @@ def get_job_result(job_id: str):
 
 @router.post("/jobs/start")
 def start_job(request: StartJobRequest):
+    
     job_id = request.job_id
     file_path = request.file_path
     output_dir = f"output_temp/{job_id}"
 
+    existing = get_job_progress(job_id)
+
+    if existing and existing[1] == "processing":
+        return {"message": "already running"}
+
     def run():
         logger.info(f"Job started | job_id={job_id}")
+        update_job_progress(job_id, "processing",None)
+        redis_conn.redis_client.publish(
+            job_id,
+            json.dumps({
+                "step":None,
+                "status": "processing"
+            })
+        )
         try:
             for thread_id, event in stream_estimation(job_id, file_path,output_dir ):
                 for node_name, state_update in event.items():
+                    
                     update_job_progress(job_id, "processing", node_name)
+                    redis_conn.redis_client.publish(
+                    job_id,
+                    json.dumps({
+                        "step": node_name,
+                        "status": "processing"
+                    })
+                )
 
-            # ✅ mark completed
             update_job_progress(job_id, "completed", "agent_4_merger")
+            redis_conn.redis_client.publish(
+                job_id,
+                json.dumps({
+                    "step": "agent_4_merger",
+                    "status": "completed"
+                })
+            )
             logger.info(f"Job completed successfully | job_id={job_id}")
 
         except Exception as e:
@@ -108,3 +131,11 @@ def start_job(request: StartJobRequest):
     threading.Thread(target=run).start()
 
     return {"message": "started"}
+
+
+@router.get("/jobs/{job_id}/stream")
+def stream_job(job_id: str):
+    return StreamingResponse(
+        event_generator(job_id),
+        media_type="text/event-stream"
+    )

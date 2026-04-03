@@ -31,51 +31,61 @@ export function ProcessingView({ jobId, filePath, onComplete, }: ProcessingViewP
     setNumPages(numPages);
   }
 
-  useEffect(() => {
-  const interval = setInterval(async () => {
-    try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects/${jobId}`);
-      const project = await res.json();
+useEffect(() => {
+  if (!jobId) return;
 
-      const status = project.status?.toLowerCase();
-      const step = project.current_step;
+  const eventSource = new EventSource(
+    `${import.meta.env.VITE_API_URL}/api/v1/jobs/${jobId}/stream`
+  );
 
-      const nodeMap: Record<string, number> = {
-  classify: 0,
-  process_text: 1,
-  process_plans: 2,
-  process_details: 3,
-  agent_4_merger: 4
-};
-      const normalizedStep = step?.toLowerCase().trim();
-      const stepIndex = nodeMap[normalizedStep];
+  const nodeMap: Record<string, number> = {
+    classify: 0,
+    process_text: 1,
+    process_plans: 2,
+    process_details: 3,
+    agent_4_merger: 4
+  };
 
-      if (stepIndex !== undefined) {
-        const completed = [];
-        for (let i = 0; i <= stepIndex; i++) {
-          completed.push(i);
-        }
-        setCompletedSteps(completed);
+  eventSource.onmessage = async (event) => {
+    const data = JSON.parse(event.data);
+
+    const step = data.step?.toLowerCase().trim();
+    const status = data.status?.toLowerCase();
+
+    const stepIndex = nodeMap[step];
+    console.log(`Here is the current step: ${stepIndex}`)
+    if (stepIndex !== undefined) {
+      const completed = [];
+      for (let i = 0; i <= stepIndex; i++) {
+        completed.push(i);
       }
-
-      // ✅ COMPLETED → fetch result
-      if (status === "completed") {
-        clearInterval(interval);
-
-        setLoadingResult(true);
-
-        const resultRes = await fetch(`${import.meta.env.VITE_API_URL}/api/v1/jobs/${jobId}/result`);
-        const result = await resultRes.json();
-
-        onComplete(result);
-      }
-
-    } catch (err) {
-      console.error("Polling error:", err);
+      setCompletedSteps(completed);
     }
-  }, 60000); // 🔥 every 1 min
 
-  return () => clearInterval(interval);
+
+    if (status === "completed") {
+      eventSource.close();
+
+      setLoadingResult(true);
+
+      const res = await fetch(
+        `${import.meta.env.VITE_API_URL}/api/v1/jobs/${jobId}/result`
+      );
+
+      const result = await res.json();
+
+      onComplete(result);
+    }
+  };
+
+  eventSource.onerror = (err) => {
+    console.error("SSE error:", err);
+    eventSource.close();
+  };
+
+  return () => {
+    eventSource.close();
+  };
 }, [jobId]);
 
   return (

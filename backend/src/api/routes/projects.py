@@ -35,7 +35,6 @@ def get_projects():
 
 @router.get("/{job_id}")
 def get_project(job_id: str):
-    logger.debug(f"Fetching project from DB with ID: {job_id}")
     try:
         row = get_projects_by_id(job_id=job_id)
         progress_row=get_job_progress(job_id=job_id)

@@ -12,28 +12,64 @@ interface SidebarProps {
 
 export function Sidebar({ onNewEstimation, selectedProjectId, onSelectProject }: SidebarProps) {
   const [projects, setProjects] = useState<Project[]>([]);
-  useEffect(() => {
-
-  const fetchProjects = () => {
-    fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects/`)
-      .then(res => res.json())
-      .then(data => {
-        setProjects(data.projects)
-         if (!selectedProjectId &&data.projects.length > 0 && onSelectProject) {
-           onSelectProject(data.projects[0].job_id);
-       }
-
-      })
-      .catch(err => console.error(err));
+useEffect(() => {
+  const fetchProjects = async () => {
+    try {
+      const res = await fetch(
+        `${import.meta.env.VITE_API_URL}/api/v1/projects/`
+      );
+      const data = await res.json();
+      setProjects(data.projects || []);
+    } catch (err) {
+      console.error("Failed to fetch projects", err);
+    }
   };
 
-  fetchProjects(); 
-   
-  const interval = setInterval(fetchProjects, 300000);
+  fetchProjects();
+}, []);
 
-  return () => clearInterval(interval);
+ useEffect(() => {
 
-}, [selectedProjectId]);
+  if (projects.length === 0) return;
+
+  const sources: EventSource[] = [];
+
+  projects.forEach((project) => {
+    if (project.status !== "processing") return;
+
+    const es = new EventSource(
+      `${import.meta.env.VITE_API_URL}/api/v1/jobs/${project.job_id}/stream`
+    );
+
+    es.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+
+      if (data.status === "completed") {
+        // ✅ update that project only
+        setProjects(prev =>
+          prev.map(p =>
+            p.job_id === project.job_id
+              ? { ...p, status: "completed" }
+              : p
+          )
+        );
+
+        es.close(); // stop listening
+      }
+    };
+
+    es.onerror = () => {
+      es.close();
+    };
+
+    sources.push(es);
+  });
+
+  return () => {
+    sources.forEach(s => s.close());
+  };
+}, [projects]);
+
 
  const renameProject = async (jobId: string, newName: string) => {
   try {
