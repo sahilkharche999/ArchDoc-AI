@@ -18,10 +18,6 @@ app = FastAPI(
     description="AI-powered structural estimation engine"
 )
 
-
-os.makedirs("assets", exist_ok=True)
-
-
 @app.on_event("startup")
 def startup():
     logger.info("Starting DAX backend...")

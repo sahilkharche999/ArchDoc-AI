@@ -42,32 +42,25 @@ export function EstimationDashboard({ projectId = "1", bomData  }: EstimationDas
   const [scale, setScale] = useState(1);
   const [zoom, setZoom] = useState(0.4);
   useEffect(() => {
-  
-  fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects/`)
-    .then(res => res.json())
-    .then(data => {
-      const project = data.projects.find((p:any) => p.job_id === projectId);
-      console.log(project);
-      setProjectMeta(project);
+    if (!projectId) return;
+    fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects/${projectId}`)
+      .then(res => res.json())
+      .then(data => {
+        console.log("projectMeta:", data);
+        setProjectMeta(data);
+      });
+  }, [projectId]);
 
-    });
-
-}, [projectId]);
-useEffect(() => {
-  setEditableBom(bomData);
-}, [bomData]);
-
-    const filePath = projectMeta
-  ? `assets/${projectMeta.job_id}_structural.pdf`
-  : null;
+  useEffect(() => {
+    setEditableBom(bomData);
+  }, [bomData]);
 
   const pdfFileObject = useMemo(() => {
-  if (!filePath) return null;
-
-  return {
-    url: `${import.meta.env.VITE_API_URL}/api/v1/${filePath}`
-  };
-}, [filePath]);
+    if (!projectMeta?.file_path) return null;
+    return {
+      url: `${import.meta.env.VITE_API_URL}/api/v1/${projectMeta.file_path}`
+    };
+  }, [projectMeta]);
 
   function onDocumentLoadSuccess({ numPages }: { numPages: number }) {
   setNumPages(numPages);
