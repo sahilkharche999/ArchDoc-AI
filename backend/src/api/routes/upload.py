@@ -11,8 +11,6 @@ from src.logger import setup_logger
 logger = setup_logger(__name__)
 router = APIRouter(prefix="/upload", tags=["upload"])
 
-UPLOAD_DIR = "assets"
-
 
 @router.post("")
 async def upload_file(
@@ -20,14 +18,15 @@ async def upload_file(
         start_page: int = Form(...),
         end_page: int = Form(...)
 ):
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    upload_dir = os.getenv("ASSETS_DIR", "/data/assets")
+    os.makedirs(upload_dir, exist_ok=True)
     logger.debug(
         f"Upload request received | filename={file.filename} | start={start_page} | end={end_page}"
     )
 
     job_id = str(uuid.uuid4())
 
-    file_path = os.path.join(UPLOAD_DIR, f"{job_id}_{file.filename}")
+    file_path = os.path.join(upload_dir, f"{job_id}_{file.filename}")
 
     with open(file_path, "wb") as f:
         f.write(await file.read())
@@ -42,7 +41,7 @@ async def upload_file(
     for i in range(start_page - 1, end_page):
         writer.add_page(reader.pages[i])
 
-    trimmed_path = os.path.join(UPLOAD_DIR, f"{job_id}_structural.pdf")
+    trimmed_path = os.path.join(upload_dir, f"{job_id}_structural.pdf")
 
     with open(trimmed_path, "wb") as f:
         writer.write(f)
