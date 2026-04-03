@@ -85,7 +85,10 @@ def start_job(request: StartJobRequest):
     
     job_id = request.job_id
     file_path = request.file_path
-    output_dir = f"output_temp/{job_id}"
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    PROJECT_ROOT = os.path.abspath(
+    os.path.join(BASE_DIR, "../../"))
+    output_dir = os.path.join(PROJECT_ROOT, "output_temp", job_id)
 
     existing = get_job_progress(job_id)
 
