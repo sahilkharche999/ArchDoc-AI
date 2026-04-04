@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import threading
 from fastapi import APIRouter
 from fastapi import HTTPException
@@ -30,23 +31,33 @@ def event_generator(job_id:str):
     logger.debug(f"Event stream started | job_id={job_id} ")
     pubsub = redis_conn.redis_client.pubsub()
     pubsub.subscribe(job_id)
-    progress = get_job_progress(job_id)
-    if progress:
-        payload = {
-            "step": progress[2],
-            "status": progress[1]
-        }
-        yield f"data: {json.dumps(payload)}\n\n"
-
-
     try:
-        for message in pubsub.listen():
-            if message["type"] != "message":
-                continue
-            data = json.loads(message["data"])
-            yield f"data: {json.dumps(data)}\n\n"
-            if data.get("status") == "completed":
-                break
+        progress = get_job_progress(job_id)
+        if progress:
+            payload = {
+                    "step": progress[2],
+                    "status": progress[1]
+                }
+            yield f"data: {json.dumps(payload)}\n\n"
+        last_heartbeat = time.time()
+        while True:
+            message = pubsub.get_message(ignore_subscribe_messages=True)
+            if message:
+                data = json.loads(message["data"])
+                logger.debug(f"SSE send | {data}")
+                yield f"data: {json.dumps(data)}\n\n"
+                if data.get("status") == "completed":
+                    yield f"data: {json.dumps(data)}\n\n"
+                    time.sleep(0.5)
+                    break
+
+            # prevents nginx/browser closing idle connection
+            if time.time() - last_heartbeat > 10:
+                yield ":\n\n"   # SSE comment (no-op)
+                last_heartbeat = time.time()
+
+            time.sleep(0.1)
+
     except Exception as e:
         logger.error(f"SSE error | job_id={job_id} | error={str(e)}")
     finally:
