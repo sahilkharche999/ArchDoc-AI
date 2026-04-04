@@ -28,6 +28,8 @@ MATERIAL_LOOKUP = load_material_weights(EXCEL_PATH)
 def event_generator(job_id:str):
 
     logger.debug(f"Event stream started | job_id={job_id} ")
+    pubsub = redis_conn.redis_client.pubsub()
+    pubsub.subscribe(job_id)
     progress = get_job_progress(job_id)
     if progress:
         payload = {
@@ -36,8 +38,6 @@ def event_generator(job_id:str):
         }
         yield f"data: {json.dumps(payload)}\n\n"
 
-    pubsub = redis_conn.redis_client.pubsub()
-    pubsub.subscribe(job_id)
 
     try:
         for message in pubsub.listen():
