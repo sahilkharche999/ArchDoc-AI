@@ -83,6 +83,11 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
         eventSource.onmessage = async (event) => {
             const data = JSON.parse(event.data);
 
+            if (!data.step) {
+                setCompletedSteps([]); 
+                return;
+            }
+
             const step = data.step?.toLowerCase().trim();
             const status = data.status?.toLowerCase();
 
@@ -189,9 +194,11 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
                                     label={step.label}
                                     isCompleted={completedSteps.includes(index)}
                                     isActive={
-                                        completedSteps.length === index &&
-                                        !completedSteps.includes(index)
-                                    }
+                                            index === 0
+                                            ? completedSteps.length === 0
+                                            : !completedSteps.includes(index) &&
+                                            completedSteps.includes(index - 1)
+                                            }
                                 />
                             ))}
                         </div>
