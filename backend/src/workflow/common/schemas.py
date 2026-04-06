@@ -41,6 +41,11 @@ class DrawingTypeResponse(BaseModel):
 class MaterialItem(BaseModel):
     item_name: str = Field(description="Exact text from drawing e.g. MC6x15.1")
     material_type: str = Field(description="Category: W, HSS, C, L, FB, ROD")
+    piece_length_ft: float | None = Field(
+        description="Length per piece in decimal feet IF explicitly stated in the callout. "
+                    "Examples: 0'-3\" -> 0.25, 10\" -> 0.833, 1'-6\" -> 1.5. "
+                    "Set to null if length is variable, 'SEE PLAN', or unknown."
+    )
     qty_rule: str = Field(description="Logic: 'FIXED: [Count]' or 'VARIABLE: [Dependency]'")
     notes: Optional[str] = Field(description="Context notes e.g. 'Side Rails'")
 
