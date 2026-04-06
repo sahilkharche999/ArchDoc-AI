@@ -461,31 +461,37 @@ def prompt_for_extract_single_detail(group_title:str,group_detail_id:str):
 
     CRITICAL RULE:
     Extract material names EXACTLY AS WRITTEN.
+    **PATTERN A: ANGLES (L-SHAPES)**
+    - Format: `L[a]X[b]X[c] X [length]`
+    - Example: `L4X4X1/4 X 0'-3"` or `L8X4X1/2X10"`
+    - Rule: Split at the LAST "X" or space before a dimension.
+    - `item_name` = The size only: `L4X4X1/4` (ALWAYS capitalize lowercase "x" to "X")
+    - `piece_length_ft` = Convert the length portion to decimal feet:
+        • `0'-3"` → 0.25
+        • `10"` → 0.833
+        • `1'-6"` → 1.5
+    - If no length is specified, set `piece_length_ft` to null.
 
-    Do NOT:
-    • Normalize sizes
-    • Expand abbreviations
-    • Convert units
-    • Interpret approximations
+    **PATTERN B: RODS / BOLTS / BARS**
+    - Format: `[size] DIA. ROD` or `ROD[size]`
+    - Example: `3/4" DIA. ROD` or `ROD5/8`
+    - Rule: Normalize to `ROD[size]`.
+    - `item_name` = `ROD3/4` or `ROD5/8`
+    - `piece_length_ft` = null (unless an explicit length like `X 2'-0"` is attached)
+
+    **STRICT ACTIONS:**
+    1. ALWAYS capitalize lowercase "x" to "X" in `item_name`.
+    2. NEVER combine size and length in `item_name`.
+    3. NEVER use washer/bolt dimensions as main member lengths.
+    4. If no explicit length exists (e.g., "TYP.", "SEE PLAN", variable spacing), set `piece_length_ft` to null.
 
     Examples:
 
     Bad: "Angle 4x4"
-    Good: "L4x4x1/4"
+    Good: "L4X4X1/4"
 
     Bad: "3/4 inch rod"
-    Good: "3/4\" DIA. ROD"
-
-    Bad: "6 inch channel"
-    Good: "MC6x15.1"
-
-    Preserve:
-    • Fractions
-    • Quotes
-    • Dashes
-    • O.C.
-    • Dia.
-    • Abbreviations
+    Good: "ROD3/4"
 
     -------------------------
     STEP 3 — READ NOTES
@@ -568,8 +574,9 @@ def prompt_for_extract_single_detail(group_title:str,group_detail_id:str):
     "visual_reasoning": "...",
     "materials": [
         {{
-        "item_name": "L4x4x1/4x0'-3\"",
+        "item_name": "L4X4X1/4",
         "material_type": "L",
+        "piece_length_ft ":  0.25,
         "qty_rule": "FIXED: 2",
         "notes": "Base connection clips"
         }}
@@ -607,7 +614,14 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS:str,valid_materials_str:str,sheet
     5. A valid materials list.
 
     Your job is to INTERLACE geometry + metadata + rules to produce the Final Bill of Materials.
-
+    ------------------------------------------------------------
+    ### LENGTH RESOLUTION PRIORITY (STRICT)
+    Before calculating linear feet, check the source of the length:
+    1. IF `piece_length_ft` > 0 in linked_definition.materials → USE IT DIRECTLY.
+      Formula: total_linear_feet = quantity * piece_length_ft
+    2. IF `piece_length_ft` is null AND qty_rule is VARIABLE → APPLY SPACING/HEIGHT FORMULA.
+    3. IF `piece_length_ft` is null AND type is PLAN-BASED (Beams/Columns) → MEASURE from plan dimensions.
+    4. NEVER invent lengths. NEVER use accessory dimensions (washers, bolts) as main member lengths.
     ------------------------------------------------------------
     ### INPUT DATA PROVIDED
 
