@@ -17,6 +17,7 @@ export function UploadState({onStartProcessing}: UploadStateProps) {
     const [startPage, setStartPage] = useState<string>("");
     const [endPage, setEndPage] = useState<string>("");
     const [numPages, setNumPages] = useState<number>();
+    const [isUploading, setIsUploading] = useState(false);
     const handleDragOver = (e: React.DragEvent) => {
         e.preventDefault();
         setIsDragging(true);
@@ -155,18 +156,27 @@ export function UploadState({onStartProcessing}: UploadStateProps) {
                     <Button
                         onClick={
                             async () => {
+                            if (isUploading) return; 
+                            try {
+                                setIsUploading(true); 
                                 const result = await uploadFile();
-                                console.log("UPLOAD RESULT 👉", result);
                                 if (result) {
-                                    console.log(result)
                                     onStartProcessing(result.job_id, result.file_path);
+                                }else{
+                                    setIsUploading(false);
                                 }
+                            }
+                            catch (err) {
+                                console.error("Upload failed:", err);
+                                setIsUploading(false);
+                            }
                             }}
-                        disabled={!file || !startPage || !endPage}
+                        disabled={!file || !startPage || !endPage || isUploading}
                         className="w-full bg-accent hover:bg-accent/90 text-accent-foreground"
                         size="lg"
+                        style={{cursor:'pointer'}}
                     >
-                        Run Estimation
+                       {isUploading ? "Uploading..." : "Run Estimation"}
                     </Button>
 
                     {/* Info */}
