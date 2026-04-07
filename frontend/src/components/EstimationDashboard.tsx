@@ -1,5 +1,6 @@
 import {useEffect, useMemo, useRef, useState} from "react";
 import {Card, CardContent} from "./ui/card";
+import { useSearchParams } from "react-router-dom";
 import {Tabs, TabsContent, TabsList, TabsTrigger} from "./ui/tabs";
 import {BOMTable} from "./BOMTable";
 import {TraceabilityView} from "./TraceabilityView";
@@ -30,10 +31,11 @@ function formatDate(dateString: string) {
     })
 }
 
-export function EstimationDashboard({projectId = "1", bomData}: EstimationDashboardProps) {
+export function EstimationDashboard({projectId, bomData}: EstimationDashboardProps) {
     const [pricePerLb, setPricePerLb] = useState(0);
     const [fabricationMarkup, setFabricationMarkup] = useState(0);
     const [galvanizing, setGalvanizing] = useState(false);
+    const [searchParams, setSearchParams] = useSearchParams();
     const [projectMeta, setProjectMeta] = useState<any>(null);
     const [editableBom, setEditableBom] = useState<BOMItem[]>(bomData);
     const [numPages, setNumPages] = useState<number>();
@@ -41,6 +43,7 @@ export function EstimationDashboard({projectId = "1", bomData}: EstimationDashbo
     const containerRef = useRef<HTMLDivElement | null>(null);
     const [scale, setScale] = useState(1);
     const [zoom, setZoom] = useState(0.4);
+    const activeTab = searchParams.get("tab") || "summary";
     useEffect(() => {
         if (!projectId) return;
         fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects/${projectId}`)
@@ -140,7 +143,7 @@ export function EstimationDashboard({projectId = "1", bomData}: EstimationDashbo
                 </div>
 
                 {/* Tabs */}
-                <Tabs defaultValue="summary" className="w-full">
+                <Tabs value={activeTab} onValueChange={(val) => setSearchParams({ tab: val })} className="w-full">
                     <TabsList className="grid w-full max-w-2xl grid-cols-3">
                         <TabsTrigger value="summary">Summary</TabsTrigger>
                         <TabsTrigger value="bom">Detailed BOM</TabsTrigger>
