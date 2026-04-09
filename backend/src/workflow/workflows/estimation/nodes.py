@@ -70,8 +70,6 @@ def node_classify_pages(state: ProjectState):
     for page_num in range(total_pages):
         temp_img_path = f"{state['output_dir']}/temp_page_{page_num}.png"
         convert_specific_page_to_png(pdf_path, page_num, temp_img_path, dpi=150)
-        sheet_info = get_sheet_number(temp_img_path)
-        sheet_number = sheet_info["normalized"]
         
         prompt=prompt_for_node_classify_pages()
 
@@ -213,6 +211,7 @@ def node_process_plans(state: ProjectState):
     
     # New State Variable to hold the plan images for Agent 5
     floor_plan_images = [] 
+    detected_details = []
     
     floor_pages = [p for p, t in state["page_map"].items() if t == "floor"]
     
@@ -234,6 +233,8 @@ def node_process_plans(state: ProjectState):
 
         sheet_info = get_sheet_number(page_img_path)
         sheet_number = sheet_info["normalized"]
+        logger.debug(f"Sheet Number: {sheet_number} processing")
+        
         
         try:
             reader = PdfReader(state["pdf_path"])
@@ -260,12 +261,13 @@ def node_process_plans(state: ProjectState):
         if os.path.exists(images_dir):
             image_files = [f for f in os.listdir(images_dir) if f.endswith(('.jpg', '.png'))]
             logger.debug(f"   > Found {len(image_files)} crops to analyze.")
-            
+
+            prompt =prompt_for_node_process_plans()
             for img_file in image_files:
                 crop_path = os.path.join(images_dir, img_file)
                 
                 # Prompt: Classify & Extract
-                prompt =prompt_for_node_process_plans()
+                
                 msg = HumanMessage(content=[
                     {"type": "text", "text": prompt},
                     {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{load_image_base64(crop_path)}"}}
@@ -314,11 +316,31 @@ def node_process_plans(state: ProjectState):
                             "path": crop_path,
                             "sheet": sheet_number
                         })
+                    elif result.type.strip() == "Detail":
+                        logger.debug(f"     > Found Detail Crop: {img_file}")
+
+                        # 1. Safe detail_id extraction
+                        detail_id = result.title.strip() if result.title else f"detail_{os.path.splitext(img_file)[0]}"
+
+                        # 2. Construct key
+                        key = f"{detail_id}/{sheet_number}" if "/" not in detail_id else detail_id
+
+                        # 3. Store ONLY detection (not full extraction)
+                        detected_details.append({
+                            "detail_id": detail_id,
+                            "detail_key": key,
+                            "crop_path": crop_path,
+                            "sheet": sheet_number,
+                            "page": page_num
+                        })
+                  
+
                 except Exception as e:
                     logger.exception(f"     ! Failed to ingest {img_file}: {e}")
                     
     return {
         "floor_plan_images": floor_plan_images, 
+         "detected_details": detected_details,
         "general_rules": "Updated Graph with Schedules"
     }
 

@@ -66,6 +66,7 @@ This image may be:
 - A Plan View (building layout)
 - A Structured Schedule (table/grid)
 - Keyed Notes (numbered references)
+- A Detail / Section Drawing (zoomed construction detail with labels like 3/S-3.4)
 - Noise (logo/title block)
 
 The crop may be:
@@ -102,12 +103,34 @@ Return:
 "type": "Plan_View"
 and "items": []
 
+-------------------------
+STEP 1B — DETAIL DETECTION (CRITICAL)
+-------------------------
+
+If NOT a Plan View, check if this is a Detail / Section Drawing.
+
+Visual Clues for Detail:
+
+• A zoomed-in construction drawing (not full building layout)
+• Labeled with identifiers like:
+  - "3/S-3.4"
+  - "SECTION A-A"
+  - "DETAIL 5"
+• Shows connections, joints, reinforcement, beams, columns, footing, etc.
+• May include callouts, arrows, or cut-section indicators
+• Usually NOT surrounded by full grid system like plan views
+
+If these are present → classify as "Detail"
+
+Return:
+"type": "Detail"
+"title": "<detected detail label or title if visible>"
 
 -------------------------
 STEP 2 — STRUCTURE DETECTION
 -------------------------
 
-If it is NOT a Plan View:
+If it is NOT a Plan View OR Detail:
 
 Determine whether it is:
 
@@ -140,6 +163,24 @@ Return empty items list [].
 DO NOT read drawing symbols.
 DO NOT attempt quantity extraction.
 
+------------------------------------------------------------
+STEP 3B — DETAIL EXTRACTION
+------------------------------------------------------------
+
+If classified as "Detail":
+
+1. Extract the detail identifier or title from the image:
+   Examples:
+   - "3/S-3.4"
+   - "DETAIL 5"
+   - "SECTION A-A"
+
+2. If no clear title is visible:
+   - Generate a short descriptive title (e.g., "beam_column_connection")
+
+3. Do NOT extract full materials table unless clearly visible.
+
+Return minimal structured output.
 
 ------------------------------------------------------------
 STEP 4 — SYMBOL SHAPE DETECTION (CRITICAL VISUAL TASK)
@@ -246,6 +287,15 @@ For Plan Views:
 {
   "type": "Plan_View",
   "title": null,
+  "columns": [],
+  "rows": []
+}
+
+For Detail:
+
+{
+  "type": "Detail",
+  "title": "Detail Identifier or Description",
   "columns": [],
   "rows": []
 }
