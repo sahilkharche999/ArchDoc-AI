@@ -27,7 +27,7 @@ from src.workflow.common.utils import (
     get_sheet_number,
     convert_specific_page_to_png,
     load_material_weights,              
-    minerU_pdf_creating_extration                
+    minerU_pdf_creating_extration,            
     )
 
 from src.infrastructure.graph_db import graph_db
@@ -41,6 +41,7 @@ load_dotenv()
 llm_pro = ChatGoogleGenerativeAI(model="gemini-3-pro-preview") 
 llm_25_pro = ChatGoogleGenerativeAI(model="gemini-2.5-pro") 
 llm_flash = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite") 
+
 
 
 # ---  AGENT 0: PAGE CLASSIFY ---
@@ -69,12 +70,9 @@ def node_classify_pages(state: ProjectState):
     for page_num in range(total_pages):
         temp_img_path = f"{state['output_dir']}/temp_page_{page_num}.png"
         convert_specific_page_to_png(pdf_path, page_num, temp_img_path, dpi=150)
-        sheet_number = get_sheet_number(temp_img_path)
-        if sheet_number[0]!='S':
-            logger.info(f"Skipping non-structural page and deleting image | sheet_number={sheet_number} | path={temp_img_path}")
-            os.remove(temp_img_path)
-            continue
-
+        sheet_info = get_sheet_number(temp_img_path)
+        sheet_number = sheet_info["normalized"]
+        
         prompt=prompt_for_node_classify_pages()
 
         image_b64 = load_image_base64(temp_img_path)
@@ -87,7 +85,14 @@ def node_classify_pages(state: ProjectState):
         except Exception as e:
             logger.error(f"Failed to classify page {page_num} | error={str(e)}")
             raise
+        
+        valid_types = {"text", "floor", "section"}
+        drawing_type = result.drawing_type.strip().lower()
+        if drawing_type not in valid_types:
+            logger.warning(f"Unexpected drawing_type={drawing_type} on page {page_num}")
+            continue
         page_map[page_num] = result.drawing_type
+        os.remove(temp_img_path)
         logger.debug(f"Page Index {page_num}: {result.drawing_type}")
     logger.info(f"Page classification completed | total_pages={total_pages}")
     return {"page_map": page_map}
@@ -227,7 +232,8 @@ def node_process_plans(state: ProjectState):
         # 2. Prepare Page Image & PDF
         convert_specific_page_to_png(state["pdf_path"], page_num, page_img_path, dpi=300)
 
-        sheet_number = get_sheet_number(page_img_path)
+        sheet_info = get_sheet_number(page_img_path)
+        sheet_number = sheet_info["normalized"]
         
         try:
             reader = PdfReader(state["pdf_path"])
@@ -367,7 +373,8 @@ def node_process_details(state: ProjectState):
             continue
 
         # 3. Extract Sheet Number
-        sheet_number = get_sheet_number(page_img_path)
+        sheet_info = get_sheet_number(page_img_path)
+        sheet_number = sheet_info["normalized"]
         logger.debug(f"   > Identified Sheet Number: {sheet_number}")
 
         # 4. Run MinerU 

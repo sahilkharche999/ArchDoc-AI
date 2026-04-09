@@ -25,6 +25,11 @@ export default function ProjectPage() {
           `${import.meta.env.VITE_API_URL}/api/v1/projects/${id}`
         );
 
+        if (!res.ok) {
+          navigate("/projects");
+          return;
+        }
+
         const project = await res.json();
         const s = project.status?.toLowerCase();
 

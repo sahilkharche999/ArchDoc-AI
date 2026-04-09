@@ -18,16 +18,16 @@ build-images:
 up:
 	# Use system docker compose if available, prefer `docker compose`
 	if docker compose version >/dev/null 2>&1; then \
-		docker compose -f docker-compose.yml up -d; \
+		docker compose -f docker-compose-local.yml up -d; \
 	else \
-		docker-compose -f docker-compose.yml up -d; \
+		docker-compose-local -f docker-compose-local.yml up -d; \
 	fi
 
 down:
 	if docker compose version >/dev/null 2>&1; then \
-		docker compose -f docker-compose.yml down; \
+		docker compose -f docker-compose-local.yml down; \
 	else \
-		docker-compose -f docker-compose.yml down; \
+		docker-compose-local -f docker-compose-local.yml down; \
 	fi
 
 rebuild:

@@ -3,8 +3,9 @@ import json
 import os
 import subprocess
 import sys
+import re
 from io import BytesIO
-
+import pdfplumber
 import fitz
 import pandas as pd
 from PIL import Image
@@ -21,6 +22,7 @@ logger = setup_logger(__name__)
 
 load_dotenv()
 llm_pro = ChatGoogleGenerativeAI(model="gemini-3-pro-preview")
+llm_25_pro = ChatGoogleGenerativeAI(model="gemini-2.5-pro") 
 llm_flash = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
 client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
@@ -340,6 +342,34 @@ def extract_text_from_response(response):
         return "".join([part["text"] for part in response.content if "text" in part]).strip()
     return str(response.content).strip()
 
+def extract_sheet_candidate(text: str) -> str:
+    if not text:
+        return ""
+
+    text = text.upper()
+
+    patterns = [
+        r"[A-Z]+-[A-Z]+-\d+\.?\d*",   # ST-DT-0029
+        r"[A-Z]-\d+\.?\d*"            # S-2.0
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return match.group(0)
+
+    return text  # fallback
+
+def normalize_sheet(sheet: str) -> str:
+    if not sheet:
+        return ""
+    sheet=sheet.strip().upper()
+    sheet = re.sub(r"\s*-\s*", "-", sheet)
+    sheet = re.sub(r"[^A-Z0-9\-.]", "", sheet)
+    parts = sheet.split("-")
+    if len(parts) >= 3:
+        return "-".join(parts[-3:])
+    return sheet
 
 def get_sheet_number(image_path: str) -> str:
     """
@@ -347,16 +377,33 @@ def get_sheet_number(image_path: str) -> str:
     """
     image_b64 = load_image_base64(image_path)
     prompt = """
-    Look at the BOTTOM RIGHT CORNER. Extract the SHEET NUMBER.
-    Examples: "S-1.0", "S-3.2".
-    Return ONLY the sheet number text. Do not write a sentence.
+    Extract the SHEET NUMBER from the drawing.
+
+    Instructions:
+    - Look primarily in the title block (usually bottom right).
+    - The sheet number can be in formats like:
+        S-2.0
+        A-1.1
+        ST-DT-0029
+        FA31137-ST-DT-0029
+    - Return ONLY the sheet number text exactly as written.
+    - Do NOT add any explanation.
+    - Do NOT include labels like "Sheet No", "Drawing No", etc.
+    - Do NOT return extra words.
     """
     msg = HumanMessage(content=[
         {"type": "text", "text": prompt},
         {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}}
     ])
     response = llm_pro.invoke([msg])
-    return extract_text_from_response(response)
+    raw = extract_text_from_response(response)
+    clean = extract_sheet_candidate(raw)
+    normalized = normalize_sheet(clean)
+    return {
+        "full": raw,
+        "normalized": normalized
+    }
+
 
 
 def normalize_material(name: str):
@@ -399,3 +446,17 @@ def enrich_bom_with_pricing(bom_items, material_lookup):
         item["total_cost"] = item["total_weight_lbs"] * price
 
     return bom_items
+
+def normalize_pdf_orientation(input_pdf, output_pdf, page_angles):
+    doc = fitz.open(input_pdf)
+
+    for i, page in enumerate(doc):
+        angle = page_angles.get(i, 0)
+        current_rotation = page.rotation
+        new_rotation = (current_rotation + angle) % 360
+        page.set_rotation(new_rotation)
+
+    doc.save(output_pdf)
+    doc.close()
+
+    return output_pdf
