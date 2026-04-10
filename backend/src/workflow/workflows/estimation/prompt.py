@@ -8,6 +8,24 @@ def prompt_for_node_classify_pages():
     - "floor": If the page shows a Plan View, Foundation Plan, or Roof Framing Plan.
     - "section": If the page shows Detail Drawings, Wall Sections, or Connection Cuts.
 
+    ------------------------------------------------------------
+    CRITICAL PRIORITY RULE (VERY IMPORTANT):
+
+    If ANY part of the page contains a Plan View
+    (e.g., grid lines, walls, framing layout, dimensions, building layout),
+
+    THEN you MUST return:
+    {"drawing_type": "floor"}
+
+    EVEN IF:
+    - The page also contains sections
+    - The page also contains details
+    - The plan view is only on a portion of the sheet
+
+    Only return "section" if NO plan view exists on the page.
+
+    ------------------------------------------------------------
+
     **OUTPUT FORMAT:**
     You must return a JSON object. Do not return just the word.
     Example: {"drawing_type": "floor"}
@@ -511,7 +529,7 @@ def prompt_for_extract_single_detail(group_title:str,group_detail_id:str):
 
     CRITICAL RULE:
     Extract material names EXACTLY AS WRITTEN.
-    **PATTERN A: ANGLES (L-SHAPES)**
+    PATTERN A: ANGLES (L-SHAPES)
     - Format: `L[a]X[b]X[c] X [length]`
     - Example: `L4X4X1/4 X 0'-3"` or `L8X4X1/2X10"`
     - Rule: Split at the LAST "X" or space before a dimension.
@@ -522,14 +540,14 @@ def prompt_for_extract_single_detail(group_title:str,group_detail_id:str):
         • `1'-6"` → 1.5
     - If no length is specified, set `piece_length_ft` to null.
 
-    **PATTERN B: RODS / BOLTS / BARS**
+    PATTERN B: RODS / BOLTS / BARS
     - Format: `[size] DIA. ROD` or `ROD[size]`
     - Example: `3/4" DIA. ROD` or `ROD5/8`
     - Rule: Normalize to `ROD[size]`.
     - `item_name` = `ROD3/4` or `ROD5/8`
     - `piece_length_ft` = null (unless an explicit length like `X 2'-0"` is attached)
 
-    **STRICT ACTIONS:**
+    STRICT ACTIONS:
     1. ALWAYS capitalize lowercase "x" to "X" in `item_name`.
     2. NEVER combine size and length in `item_name`.
     3. NEVER use washer/bolt dimensions as main member lengths.

@@ -27,7 +27,8 @@ from src.workflow.common.utils import (
     get_sheet_number,
     convert_specific_page_to_png,
     load_material_weights,              
-    minerU_pdf_creating_extration,            
+    minerU_pdf_creating_extration,       
+    classify_group_image     
     )
 
 from src.infrastructure.graph_db import graph_db
@@ -69,8 +70,7 @@ def node_classify_pages(state: ProjectState):
         
     for page_num in range(total_pages):
         temp_img_path = f"{state['output_dir']}/temp_page_{page_num}.png"
-        convert_specific_page_to_png(pdf_path, page_num, temp_img_path, dpi=150)
-        
+        convert_specific_page_to_png(pdf_path, page_num, temp_img_path, dpi=300)
         prompt=prompt_for_node_classify_pages()
 
         image_b64 = load_image_base64(temp_img_path)
@@ -424,11 +424,17 @@ def node_process_details(state: ProjectState):
 
    
         logger.debug(f"   > Step 2: Extracting {len(detail_groups)} details...") 
-        
+        temp_plan_like_details = []
         for group in detail_groups:
                 # Call the extractor for this specific group
                 logger.info(f" > Extracting detail: {group.detail_id}")
-                detail_data = extract_single_detail(group, images_dir)
+                detail_data = extract_single_detail(
+                    group,
+                    images_dir,
+                    temp_plan_like_details,
+                    sheet_number,
+                    page_num
+                )
                 
                 if detail_data:
                     # Construct Key (Clean logic)
@@ -448,7 +454,58 @@ def node_process_details(state: ProjectState):
                         sheet_number=sheet_number
                     )
 
-    return {"detail_library": detail_library}
+        for plan in temp_plan_like_details:
+                    img_path = plan["image_path"]
+                    plan_sheet = plan["sheet"]
+
+                    logger.debug(f"Processing plan image: {img_path}")
+
+                    # 1. Run DINO
+                    try:
+                        raw_symbols = detect_and_read_symbols(
+                            img_path,
+                            output_dir=os.path.join(os.path.dirname(img_path), "symbols")
+                        )
+                        raw_symbols = [s for s in raw_symbols if s.get("text_content") != "Unknown"]
+                    except Exception as e:
+                        logger.error(f"DINO failed: {e}")
+                        continue
+
+                    enriched_symbols = []
+
+                    # 2. Semantic search
+                    for sym in raw_symbols:
+                        query_text = f"{sym.get('shape','')} {sym.get('text_content','')}"
+
+                        matches = graph_db.semantic_search(
+                            query_text,
+                            project_id=os.path.basename(state["pdf_path"]),
+                            sheet_number=sheet_number,
+                            limit=1
+                        )
+
+                        definition = None
+
+                        if matches:
+                            score = matches[0].get("score")
+                            if score and score > 0.8:
+                                definition = matches[0]
+
+                        sym["linked_definition"] = definition
+                        enriched_symbols.append(sym)
+
+                    # 3. STORE using SAME FUNCTION (safe reuse)
+
+                    graph_db.add_detail_bom(
+                        project_id=os.path.basename(state["pdf_path"]),
+                        detail_key=f"PLAN::{plan['detail_id']}/{sheet_number}", 
+                        title=plan.get("title", "PLAN_RESOLUTION"),
+                        materials_list=enriched_symbols, 
+                        page_num=plan["page"],
+                        sheet_number=plan_sheet
+                    )
+
+    return {"detail_library": detail_library, "plan_like_details": temp_plan_like_details }
 
 
 # ---  AGENT 4: DETAIL PROCESSOR --- 
