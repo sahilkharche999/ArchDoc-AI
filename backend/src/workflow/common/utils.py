@@ -3,8 +3,9 @@ import json
 import os
 import subprocess
 import sys
+import re
 from io import BytesIO
-
+import pdfplumber
 import fitz
 import pandas as pd
 from PIL import Image
@@ -13,7 +14,12 @@ from google import genai
 from langchain_core.messages import HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pdf2image import convert_from_path
-
+from src.workflow.workflows.estimation.prompt import (
+    prompt_for_node_process_plans,prompt_for_extract_single_detail
+    )
+from src.workflow.common.schemas import (
+    IngestionOutput 
+    )
 from src.logger import setup_logger
 from src.workflow.common.schemas import DetailExtraction, DetailGroup, DetailMap
 
@@ -21,6 +27,7 @@ logger = setup_logger(__name__)
 
 load_dotenv()
 llm_pro = ChatGoogleGenerativeAI(model="gemini-3-pro-preview")
+llm_25_pro = ChatGoogleGenerativeAI(model="gemini-2.5-pro") 
 llm_flash = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
 client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
@@ -90,8 +97,35 @@ def map_page_layout(pdf_layout_path: str, json_path: str, images_dir: str):
         logger.error(f"[Layout] Mapping failed | error={str(e)}")
         return []
 
+def classify_image_as_plan(image_path):
 
-def extract_single_detail(group: DetailGroup, images_dir: str):
+    prompt = """
+    Classify this image:
+
+    - PLAN_VIEW → layout, grid, structural plan
+    - DETAIL → component-level drawing
+
+    Return ONLY JSON:
+    {"type": "PLAN_VIEW"} or {"type": "DETAIL"}
+    """
+
+    msg = HumanMessage(content=[
+        {"type": "text", "text": prompt},
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{load_image_base64(image_path)}"}}
+    ])
+
+    try:
+        result = llm_flash.invoke([msg])
+        text = result.content.lower()
+
+        if "plan_view" in text:
+            return "PLAN_VIEW"
+        return "DETAIL"
+
+    except Exception:
+        return "DETAIL"  # safe fallback
+
+def extract_single_detail(group: DetailGroup, images_dir: str, temp_plan_like_details: list, sheet_number: str, page_num: int):
     """
     Analyzes a SINGLE detail group (specific images + text) to get the BOM.
     Used in the Floor plan agent 
@@ -99,38 +133,53 @@ def extract_single_detail(group: DetailGroup, images_dir: str):
     logger.debug(f"   > Extracting BOM for {group.detail_id}...")
 
     payload = []
+    plan_images = []
+    detail_images = []
+
+      # STEP 1 — Classify each image
+    for img_file in group.image_files:
+        fname = os.path.basename(img_file)
+        full_path = os.path.join(images_dir, fname)
+
+        if not os.path.exists(full_path):
+            continue
+
+        img_type = classify_image_as_plan(full_path)
+
+        if img_type == "PLAN_VIEW":
+            plan_images.append(full_path)
+        else:
+            detail_images.append(full_path)
+
+     # STEP 2 — If ANY plan image → store & exit
+    if len(plan_images) > 0:
+        logger.debug(f"Plan-like detected in group {group.detail_id}")
+
+        temp_plan_like_details.append({
+            "detail_id": group.detail_id,
+            "sheet": sheet_number,
+            "image_path": plan_images[0],  # pick first
+            "page": page_num,
+            "title": group.title 
+        })
+
 
     # A. Prompt
-    prompt = f"""
-    You are a Senior Structural Detailer.
-    Analyze this specific detail: **"{group.title}"** ({group.detail_id}).
-    
-    ### INPUTS:
-    I have cropped the specific images and text for this detail.
-    
-    ### TASK:
-    Extract the **Bill of Materials (BOM)** and **Fabrication Metrics**.
-    
-    1. **Read Leader Lines:** Look at the images. Extract material names EXACTLY as written.
-    2. **Read Notes:** Look at the text blocks provided.
-    3. **Define Logic:** Fixed vs Variable count.
-    
-    Return the `DetailExtraction` object.
-    """
+    prompt = prompt_for_extract_single_detail(group_title=group.title,group_detail_id=group.detail_id)
     payload.append({"type": "text", "text": prompt})
 
     # B. Add Specific Images
-    for img_file in group.image_files:
-        # Handle full path or relative path from JSON
-        fname = os.path.basename(img_file)
-        full_path = os.path.join(images_dir, fname)
-        if os.path.exists(full_path):
-            b64 = load_image_base64(Image.open(full_path))
-            payload.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}})
+    for img_path in detail_images:
+        b64 = load_image_base64(Image.open(img_path))
+        payload.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{b64}"}
+        })
 
     # C. Add Specific Text
     if group.text_blocks:
-        payload.append({"type": "text", "text": "NOTES:\n" + "\n".join(group.text_blocks)})
+        clean_text = "\n".join([t.strip() for t in group.text_blocks if t.strip()])
+        payload.append({"type": "text", "text": f"NOTES:\n{clean_text}"})
 
     try:
         # Use Pro for reading the engineering text
@@ -340,6 +389,34 @@ def extract_text_from_response(response):
         return "".join([part["text"] for part in response.content if "text" in part]).strip()
     return str(response.content).strip()
 
+def extract_sheet_candidate(text: str) -> str:
+    if not text:
+        return ""
+
+    text = text.upper()
+
+    patterns = [
+        r"[A-Z]+-[A-Z]+-\d+\.?\d*",   # ST-DT-0029
+        r"[A-Z]-\d+\.?\d*"            # S-2.0
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return match.group(0)
+
+    return text  # fallback
+
+def normalize_sheet(sheet: str) -> str:
+    if not sheet:
+        return ""
+    sheet=sheet.strip().upper()
+    sheet = re.sub(r"\s*-\s*", "-", sheet)
+    sheet = re.sub(r"[^A-Z0-9\-.]", "", sheet)
+    parts = sheet.split("-")
+    if len(parts) >= 3:
+        return "-".join(parts[-3:])
+    return sheet
 
 def get_sheet_number(image_path: str) -> str:
     """
@@ -347,16 +424,33 @@ def get_sheet_number(image_path: str) -> str:
     """
     image_b64 = load_image_base64(image_path)
     prompt = """
-    Look at the BOTTOM RIGHT CORNER. Extract the SHEET NUMBER.
-    Examples: "S-1.0", "S-3.2".
-    Return ONLY the sheet number text. Do not write a sentence.
+    Extract the SHEET NUMBER from the drawing.
+
+    Instructions:
+    - Look primarily in the title block (usually bottom right).
+    - The sheet number can be in formats like:
+        S-2.0
+        A-1.1
+        ST-DT-0029
+        FA31137-ST-DT-0029
+    - Return ONLY the sheet number text exactly as written.
+    - Do NOT add any explanation.
+    - Do NOT include labels like "Sheet No", "Drawing No", etc.
+    - Do NOT return extra words.
     """
     msg = HumanMessage(content=[
         {"type": "text", "text": prompt},
         {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}}
     ])
     response = llm_pro.invoke([msg])
-    return extract_text_from_response(response)
+    raw = extract_text_from_response(response)
+    clean = extract_sheet_candidate(raw)
+    normalized = normalize_sheet(clean)
+    return {
+        "full": raw,
+        "normalized": normalized
+    }
+
 
 
 def normalize_material(name: str):
@@ -399,3 +493,29 @@ def enrich_bom_with_pricing(bom_items, material_lookup):
         item["total_cost"] = item["total_weight_lbs"] * price
 
     return bom_items
+
+def normalize_pdf_orientation(input_pdf, output_pdf, page_angles):
+    doc = fitz.open(input_pdf)
+
+    for i, page in enumerate(doc):
+        angle = page_angles.get(i, 0)
+        current_rotation = page.rotation
+        new_rotation = (current_rotation + angle) % 360
+        page.set_rotation(new_rotation)
+
+    doc.save(output_pdf)
+    doc.close()
+
+    return output_pdf
+
+def classify_group_image(image_path):
+    prompt = prompt_for_node_process_plans()
+
+    msg = HumanMessage(content=[
+        {"type": "text", "text": prompt},
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{load_image_base64(image_path)}"}}
+    ])
+
+    result = llm_flash.with_structured_output(IngestionOutput).invoke([msg])
+
+    return result.type

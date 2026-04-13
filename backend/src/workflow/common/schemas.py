@@ -150,7 +150,7 @@ class TextRulesExtraction(BaseModel):
 
 
 class IngestionOutput(BaseModel):
-    type: Literal["Schedule", "Keyed_Notes", "Plan_View", "Ignore"]
+    type: Literal["Schedule", "Keyed_Notes", "Plan_View", "Detail", "Ignore"]
     title: Optional[str]
     columns: Optional[List[str]]
     rows: Optional[List[Dict[str, str]]]

@@ -1,23 +1,34 @@
-import {useState} from "react";
+import {useState,useEffect} from "react";
 import {Card, CardContent, CardHeader, CardTitle} from "./ui/card";
 import {Button} from "./ui/button";
 import {FileText, Upload,} from "lucide-react";
 import {Input} from "./ui/input";
-import {Document, pdfjs} from "react-pdf";
+import {Document, pdfjs,Page} from "react-pdf";
 
-pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.min.mjs',
+  import.meta.url
+).toString();
 
 interface UploadStateProps {
     onStartProcessing: (jobId: string, filePath: string) => void;
 }
 
 export function UploadState({onStartProcessing}: UploadStateProps) {
+
+    const [showPreview, setShowPreview] = useState(false);
+    const [needsRotation, setNeedsRotation] = useState<boolean | null>(null);
+    const [pageRotations, setPageRotations] = useState<{[key: number]: number}>({});
+    const [currentPage, setCurrentPage] = useState(1);
+    const [isFixing, setIsFixing] = useState(false);
     const [file, setFile] = useState<File | null>(null);
     const [isDragging, setIsDragging] = useState(false);
     const [startPage, setStartPage] = useState<string>("");
     const [endPage, setEndPage] = useState<string>("");
     const [numPages, setNumPages] = useState<number>();
     const [isUploading, setIsUploading] = useState(false);
+    const [fileUrl, setFileUrl] = useState<string | null>(null);
+    const [pdfVersion, setPdfVersion] = useState(0);
     const handleDragOver = (e: React.DragEvent) => {
         e.preventDefault();
         setIsDragging(true);
@@ -40,6 +51,9 @@ export function UploadState({onStartProcessing}: UploadStateProps) {
         const selectedFile = e.target.files?.[0];
         if (selectedFile) {
             setFile(selectedFile);
+            setFileUrl(URL.createObjectURL(selectedFile));
+            setShowPreview(true);
+            setNeedsRotation(null);
         }
     };
 
@@ -64,6 +78,76 @@ export function UploadState({onStartProcessing}: UploadStateProps) {
 
         return data;
     };
+
+    const rotatePage = (direction: "left" | "right") => {
+  setPageRotations(prev => {
+    const current = prev[currentPage - 1] || 0;
+    const newRotation =
+      direction === "right"
+        ? (current + 90) % 360
+        : (current - 90 + 360) % 360;
+
+    return {
+      ...prev,
+      [currentPage - 1]: newRotation,
+    };
+  });
+};
+
+    async function handleApplyRotation() {
+  if (!file) return;
+  
+  try {
+    setIsFixing(true);
+
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("rotation_map", JSON.stringify(pageRotations));
+    console.log("🚀 Sending rotation map:", pageRotations);
+
+    const response = await fetch(
+      `${import.meta.env.VITE_API_URL}/api/v1/pdf/fix`,
+      {
+        method: "POST",
+        body: formData,
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error("Failed to fix PDF");
+    }
+
+    const blob = await response.blob();
+
+    const newFile = new File([blob], file.name, {
+      type: "application/pdf",
+    });
+
+    const newUrl = URL.createObjectURL(newFile);
+    const oldUrl = fileUrl;
+
+    setFile(newFile);
+    setFileUrl(newUrl);
+    setPdfVersion(prev => prev + 1);
+    if (oldUrl) {
+        setTimeout(() => URL.revokeObjectURL(oldUrl), 1000);
+    }
+    // setPageRotations({});
+   setNeedsRotation(false);
+    setCurrentPage(1);
+
+  } catch (err) {
+    console.error("Fix failed:", err);
+  } finally {
+    setIsFixing(false);
+  }
+}
+
+    useEffect(() => {
+  return () => {
+    if (fileUrl) URL.revokeObjectURL(fileUrl);
+  };
+}, [fileUrl]);
 
     return (
         <div className="flex items-center justify-center min-h-screen p-8">
@@ -99,15 +183,7 @@ export function UploadState({onStartProcessing}: UploadStateProps) {
                             htmlFor="file-upload"
                             className="cursor-pointer flex flex-col items-center"
                         >
-                            {file && (
-                                <div style={{display: "none"}}>
-                                    <Document
-                                        file={file}
-                                        onLoadSuccess={onDocumentLoadSuccess}
-                                        onLoadError={(err) => console.error("PDF load error:", err)}
-                                    />
-                                </div>
-                            )}
+                           
                             {file ? (
                                 <>
                                     <FileText className="w-16 h-16 text-accent mb-4"/>
@@ -132,6 +208,77 @@ export function UploadState({onStartProcessing}: UploadStateProps) {
                             )}
                         </label>
                     </div>
+                    {isFixing && (
+  <p className="text-sm text-muted-foreground">
+    Fixing orientation... please wait
+  </p>
+)}
+
+                    {showPreview && file && (
+                        <div className="flex flex-col items-center gap-4">
+                            
+                            <Document  key={pdfVersion}file={fileUrl}
+                              onLoadSuccess={(data) => {
+                                    console.log("PDF LOADED SUCCESS:", data);
+                                    onDocumentLoadSuccess(data);
+                                }}
+                                onLoadError={(err) => {
+                                    console.error("❌ PDF LOAD ERROR:", err);
+                                }}
+                               loading={<p>Loading preview...</p>}>
+                            <Page
+                            pageNumber={currentPage}
+                            width={400}
+                            rotate={pageRotations[currentPage - 1] || 0}
+                            />
+                            </Document>
+                            <div className="flex gap-4 items-center">
+                            <Button
+                                disabled={currentPage <= 1}
+                                onClick={() => setCurrentPage(p => p - 1)}
+                            >
+                                Prev
+                            </Button>
+
+                            <span>Page {currentPage} / {numPages}</span>
+
+                            <Button
+                                disabled={currentPage >= (numPages || 1)}
+                                onClick={() => setCurrentPage(p => p + 1)}
+                            >
+                                Next
+                            </Button>
+                            </div>
+
+                          
+                            {needsRotation === null && (
+                            <div className="flex gap-4">
+                                <Button onClick={() => setNeedsRotation(false)}>
+                                Looks Good 
+                                </Button>
+                                <Button onClick={() => setNeedsRotation(true)}>
+                                Needs Rotation 
+                                </Button>
+                            </div>
+                            )}
+
+                            {needsRotation && (
+                            <div className="flex gap-4">
+                                <Button onClick={() => rotatePage("right")}>
+                                Rotate Right
+                                </Button>
+                                <Button onClick={() => rotatePage("left")}>
+                                Rotate Left
+                                </Button>
+                               <Button onClick={handleApplyRotation} disabled={isFixing}>
+                                {isFixing ? "Fixing..." : "Apply Fix"}
+                                </Button>
+                            </div>
+                            )}
+                        </div>
+                        )}
+
+                    
 
 
                     {/* Processing Checklist */}
@@ -171,7 +318,7 @@ export function UploadState({onStartProcessing}: UploadStateProps) {
                                 setIsUploading(false);
                             }
                             }}
-                        disabled={!file || !startPage || !endPage || isUploading}
+                        disabled={!file || !startPage || !endPage || isUploading ||   needsRotation === null || needsRotation === true}
                         className="w-full bg-accent hover:bg-accent/90 text-accent-foreground"
                         size="lg"
                         style={{cursor:'pointer'}}

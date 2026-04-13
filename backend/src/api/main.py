@@ -8,7 +8,7 @@ from src.db.init_job_progress_table import init_job_progress_table
 from src.logger import setup_logger
 from dotenv import load_dotenv
 from src.redis_conn import connect_redis
-
+from src.api.routes import pdf_fixes
 load_dotenv()
 
 logger = setup_logger(__name__)
@@ -57,7 +57,7 @@ except Exception as e:
 app.include_router(upload.router, prefix="/api/v1")
 app.include_router(jobs.router, prefix="/api/v1")
 app.include_router(projects.router, prefix="/api/v1")
-
+app.include_router(pdf_fixes.router, prefix="/api/v1")
 
 @app.get("/health")
 def health():

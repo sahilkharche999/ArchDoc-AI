@@ -27,7 +27,8 @@ from src.workflow.common.utils import (
     get_sheet_number,
     convert_specific_page_to_png,
     load_material_weights,              
-    minerU_pdf_creating_extration                
+    minerU_pdf_creating_extration,       
+    classify_group_image     
     )
 
 from src.infrastructure.graph_db import graph_db
@@ -41,6 +42,7 @@ load_dotenv()
 llm_pro = ChatGoogleGenerativeAI(model="gemini-3-pro-preview") 
 llm_25_pro = ChatGoogleGenerativeAI(model="gemini-2.5-pro") 
 llm_flash = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite") 
+
 
 
 # ---  AGENT 0: PAGE CLASSIFY ---
@@ -68,13 +70,7 @@ def node_classify_pages(state: ProjectState):
         
     for page_num in range(total_pages):
         temp_img_path = f"{state['output_dir']}/temp_page_{page_num}.png"
-        convert_specific_page_to_png(pdf_path, page_num, temp_img_path, dpi=150)
-        sheet_number = get_sheet_number(temp_img_path)
-        if sheet_number[0]!='S':
-            logger.info(f"Skipping non-structural page and deleting image | sheet_number={sheet_number} | path={temp_img_path}")
-            os.remove(temp_img_path)
-            continue
-
+        convert_specific_page_to_png(pdf_path, page_num, temp_img_path, dpi=300)
         prompt=prompt_for_node_classify_pages()
 
         image_b64 = load_image_base64(temp_img_path)
@@ -87,7 +83,14 @@ def node_classify_pages(state: ProjectState):
         except Exception as e:
             logger.error(f"Failed to classify page {page_num} | error={str(e)}")
             raise
+        
+        valid_types = {"text", "floor", "section"}
+        drawing_type = result.drawing_type.strip().lower()
+        if drawing_type not in valid_types:
+            logger.warning(f"Unexpected drawing_type={drawing_type} on page {page_num}")
+            continue
         page_map[page_num] = result.drawing_type
+        os.remove(temp_img_path)
         logger.debug(f"Page Index {page_num}: {result.drawing_type}")
     logger.info(f"Page classification completed | total_pages={total_pages}")
     return {"page_map": page_map}
@@ -208,6 +211,7 @@ def node_process_plans(state: ProjectState):
     
     # New State Variable to hold the plan images for Agent 5
     floor_plan_images = [] 
+    detected_details = []
     
     floor_pages = [p for p, t in state["page_map"].items() if t == "floor"]
     
@@ -227,7 +231,10 @@ def node_process_plans(state: ProjectState):
         # 2. Prepare Page Image & PDF
         convert_specific_page_to_png(state["pdf_path"], page_num, page_img_path, dpi=300)
 
-        sheet_number = get_sheet_number(page_img_path)
+        sheet_info = get_sheet_number(page_img_path)
+        sheet_number = sheet_info["normalized"]
+        logger.debug(f"Sheet Number: {sheet_number} processing")
+        
         
         try:
             reader = PdfReader(state["pdf_path"])
@@ -254,12 +261,13 @@ def node_process_plans(state: ProjectState):
         if os.path.exists(images_dir):
             image_files = [f for f in os.listdir(images_dir) if f.endswith(('.jpg', '.png'))]
             logger.debug(f"   > Found {len(image_files)} crops to analyze.")
-            
+
+            prompt =prompt_for_node_process_plans()
             for img_file in image_files:
                 crop_path = os.path.join(images_dir, img_file)
                 
                 # Prompt: Classify & Extract
-                prompt =prompt_for_node_process_plans()
+                
                 msg = HumanMessage(content=[
                     {"type": "text", "text": prompt},
                     {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{load_image_base64(crop_path)}"}}
@@ -308,11 +316,31 @@ def node_process_plans(state: ProjectState):
                             "path": crop_path,
                             "sheet": sheet_number
                         })
+                    elif result.type.strip() == "Detail":
+                        logger.debug(f"     > Found Detail Crop: {img_file}")
+
+                        # 1. Safe detail_id extraction
+                        detail_id = result.title.strip() if result.title else f"detail_{os.path.splitext(img_file)[0]}"
+
+                        # 2. Construct key
+                        key = f"{detail_id}/{sheet_number}" if "/" not in detail_id else detail_id
+
+                        # 3. Store ONLY detection (not full extraction)
+                        detected_details.append({
+                            "detail_id": detail_id,
+                            "detail_key": key,
+                            "crop_path": crop_path,
+                            "sheet": sheet_number,
+                            "page": page_num
+                        })
+                  
+
                 except Exception as e:
                     logger.exception(f"     ! Failed to ingest {img_file}: {e}")
                     
     return {
         "floor_plan_images": floor_plan_images, 
+         "detected_details": detected_details,
         "general_rules": "Updated Graph with Schedules"
     }
 
@@ -367,7 +395,8 @@ def node_process_details(state: ProjectState):
             continue
 
         # 3. Extract Sheet Number
-        sheet_number = get_sheet_number(page_img_path)
+        sheet_info = get_sheet_number(page_img_path)
+        sheet_number = sheet_info["normalized"]
         logger.debug(f"   > Identified Sheet Number: {sheet_number}")
 
         # 4. Run MinerU 
@@ -395,11 +424,17 @@ def node_process_details(state: ProjectState):
 
    
         logger.debug(f"   > Step 2: Extracting {len(detail_groups)} details...") 
-        
+        temp_plan_like_details = []
         for group in detail_groups:
                 # Call the extractor for this specific group
                 logger.info(f" > Extracting detail: {group.detail_id}")
-                detail_data = extract_single_detail(group, images_dir)
+                detail_data = extract_single_detail(
+                    group,
+                    images_dir,
+                    temp_plan_like_details,
+                    sheet_number,
+                    page_num
+                )
                 
                 if detail_data:
                     # Construct Key (Clean logic)
@@ -419,7 +454,58 @@ def node_process_details(state: ProjectState):
                         sheet_number=sheet_number
                     )
 
-    return {"detail_library": detail_library}
+        for plan in temp_plan_like_details:
+                    img_path = plan["image_path"]
+                    plan_sheet = plan["sheet"]
+
+                    logger.debug(f"Processing plan image: {img_path}")
+
+                    # 1. Run DINO
+                    try:
+                        raw_symbols = detect_and_read_symbols(
+                            img_path,
+                            output_dir=os.path.join(os.path.dirname(img_path), "symbols")
+                        )
+                        raw_symbols = [s for s in raw_symbols if s.get("text_content") != "Unknown"]
+                    except Exception as e:
+                        logger.error(f"DINO failed: {e}")
+                        continue
+
+                    enriched_symbols = []
+
+                    # 2. Semantic search
+                    for sym in raw_symbols:
+                        query_text = f"{sym.get('shape','')} {sym.get('text_content','')}"
+
+                        matches = graph_db.semantic_search(
+                            query_text,
+                            project_id=os.path.basename(state["pdf_path"]),
+                            sheet_number=sheet_number,
+                            limit=1
+                        )
+
+                        definition = None
+
+                        if matches:
+                            score = matches[0].get("score")
+                            if score and score > 0.8:
+                                definition = matches[0]
+
+                        sym["linked_definition"] = definition
+                        enriched_symbols.append(sym)
+
+                    # 3. STORE using SAME FUNCTION (safe reuse)
+
+                    graph_db.add_detail_bom(
+                        project_id=os.path.basename(state["pdf_path"]),
+                        detail_key=f"PLAN::{plan['detail_id']}/{sheet_number}", 
+                        title=plan.get("title", "PLAN_RESOLUTION"),
+                        materials_list=enriched_symbols, 
+                        page_num=plan["page"],
+                        sheet_number=plan_sheet
+                    )
+
+    return {"detail_library": detail_library, "plan_like_details": temp_plan_like_details }
 
 
 # ---  AGENT 4: DETAIL PROCESSOR --- 

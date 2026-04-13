@@ -1,5 +1,5 @@
 import json
-
+import argparse
 from src.db.checkpoint import memory
 from src.logger import setup_logger
 from src.workflow.workflows.estimation.graph import workflow
@@ -7,6 +7,21 @@ from src.workflow.workflows.estimation.graph import workflow
 logger = setup_logger(__name__)
 
 app = workflow.compile(checkpointer=memory)
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Workflow Control CLI")
+
+    parser.add_argument("--thread_id", type=str, required=True, help="Thread ID to resume")
+    parser.add_argument("--state_step", type=str, required=True, help="Node to resume from")
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["rerun", "check"],
+        default="rerun",
+        help="Action to perform"
+    )
+
+    return parser.parse_args()
 
 
 def check_prev_result(thread_id: str, state_step: str):
@@ -54,8 +69,14 @@ def rerun_from_the_node(thread_id: str, state_step: str):
                 logger.info(json.dumps(state_update, indent=2))
 
 
-if __name__=="__main__":
-    thread_id="6c5b503f-3c43-4ace-95e6-8a9bc7870ca9"
-    state_step="process_details"
-    rerun_from_the_node(thread_id,state_step)
+    if __name__ == "__main__":
+        args = parse_args()
 
+        thread_id = args.thread_id
+        state_step = args.state_step
+        mode = args.mode
+
+        if mode == "check":
+            check_prev_result(thread_id, state_step)
+        else:
+            rerun_from_the_node(thread_id, state_step)
