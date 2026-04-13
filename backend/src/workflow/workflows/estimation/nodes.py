@@ -591,7 +591,9 @@ def node_agent_4_merger(state: ProjectState,config):
                 
                 # B. Recursive Lookup (Detail Component -> Schedule)
                 if definition and definition.get("BOM"):
+                    logger.info(f"DEFINITION:{definition}")
                     for item in definition["BOM"]:
+                        logger.info(f"Item : {item}")
                         # Check for "Schedule" or "See Plan" in rule/material
                         rule_text = item.get("qty_rule", "")
                         mat_text = item.get("material", "") or ""
@@ -654,6 +656,22 @@ def node_agent_4_merger(state: ProjectState,config):
     else:
         update_job_status(job_id, "completed")
         update_job_progress(job_id, "completed", "agent_4_merger")
+        # save the BOM in .json file   
+        job_id = config["configurable"]["thread_id"]
+        base_path = os.getenv("BOM_STORAGE_PATH", "/data/bom")
+        os.makedirs(base_path, exist_ok=True)
+        file_path = os.path.join(base_path, f"{job_id}.json")
+        data = {
+            "job_id": job_id,
+            "bom": [item.model_dump() for item in all_extracted_items]
+        }
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            logger.info(f"BOM saved successfully at {file_path}")
+        except Exception as e:
+            logger.error(f"Failed to save BOM | job_id={job_id} | error={str(e)}")
+
 
     return {"final_bill_of_materials": {"final_bill_of_materials": [item.model_dump() for item in all_extracted_items]}}   
 

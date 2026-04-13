@@ -69,7 +69,7 @@ def rerun_from_the_node(thread_id: str, state_step: str):
                 logger.info(json.dumps(state_update, indent=2))
 
 
-    if __name__ == "__main__":
+if __name__ == "__main__":
         args = parse_args()
 
         thread_id = args.thread_id

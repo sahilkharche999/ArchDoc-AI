@@ -70,23 +70,28 @@ def event_generator(job_id:str):
 @router.get("/jobs/{job_id}/result")
 def get_job_result(job_id: str):
     logger.debug(f"Fetching result | job_id={job_id}")
-    config = {"configurable": {"thread_id": job_id}}
+    base_path = os.getenv("BOM_STORAGE_PATH", "/data/bom")
+    file_path = os.path.join(base_path, f"{job_id}.json")
+    if not os.path.exists(file_path):
+         logger.warning(f"BOM file not found | job_id={job_id} | path={file_path}")
+         raise HTTPException(status_code=404, detail="Result not ready")
+  
     try:
-        snapshot = app.get_state(config)
-
-        if not snapshot.values:
-            logger.error(f"Job not found | job_id={job_id}")
-            raise HTTPException(status_code=404, detail="Job not found")
-
-        bom_wrapper = snapshot.values.get("final_bill_of_materials", {})
-        bom = bom_wrapper.get("final_bill_of_materials", [])
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    
+        bom = data.get("bom", [])
         logger.debug(f"BOM fetched | job_id={job_id} | count={len(bom)}")
+
         bom = enrich_bom_with_pricing(bom, MATERIAL_LOOKUP)
         logger.debug(f"Result ready | job_id={job_id} | count={len(bom)}")
         return {
             "job_id": job_id,
             "bom": bom
         }
+    except json.JSONDecodeError:
+        logger.error(f"Invalid JSON format | job_id={job_id}")
+        raise HTTPException(status_code=500, detail="Corrupted result file")
     except Exception as e:
         logger.exception(f"Failed to fetch result | job_id={job_id}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
