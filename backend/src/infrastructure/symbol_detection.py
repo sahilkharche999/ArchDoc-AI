@@ -94,8 +94,8 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
     results = _processor.post_process_grounded_object_detection(
         outputs,
         inputs.input_ids,
-        threshold=0.19,
-        text_threshold=0.10,
+        threshold=0.15,
+        text_threshold=0.8,
         target_sizes=[image.size[::-1]]
     )[0]
 
@@ -104,7 +104,7 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
 
     # 2. Process Detections
     for i, (score, label, box) in enumerate(zip(results["scores"], results["labels"], results["boxes"])):
-        if score.item() < 0.20: continue
+        if score.item() < 0.15: continue
         logger.debug(
             f"Detection accepted | index={i} | label={label} | score={score.item():.2f}"
         )

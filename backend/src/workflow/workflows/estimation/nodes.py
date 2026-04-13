@@ -97,7 +97,7 @@ def node_classify_pages(state: ProjectState):
 
 
 # ---  AGENT 1: TEXT PROCESSOR ---
-def node_process_text_rules(state: ProjectState):
+def node_process_text_rules(state: ProjectState,config):
     """
     Extracts text content and schedule rules from text pages using minerU.
     
@@ -164,7 +164,7 @@ def node_process_text_rules(state: ProjectState):
                 section_name = section.section_name
                 for rule in section.rules:
                     graph_db.add_text_rule(
-                        project_id=os.path.basename(state["pdf_path"]),
+                        project_id=config["configurable"]["thread_id"],
                         section_name=section_name,
                         rule_number=rule.rule_number,
                         text=rule.text
@@ -183,7 +183,7 @@ def node_process_text_rules(state: ProjectState):
     return {"general_rules": state["general_rules"]}
 
 # ---  AGENT 2: PROCESS PLAN ---
-def node_process_plans(state: ProjectState):
+def node_process_plans(state: ProjectState,config):
     """
     Processes floor plan pages using minerU-VLM to extract schedules and identify floor plans.
     
@@ -300,7 +300,7 @@ def node_process_plans(state: ProjectState):
                                 logger.warning(f"     ! Could not determine primary key for row: {row_data}")
 
                             graph_db.add_schedule_rule(
-                                project_id=os.path.basename(state["pdf_path"]),
+                                project_id=config["configurable"]["thread_id"],
                                 schedule_name=result.title,
                                 symbol=primary_key,
                                 row_data=row_data,
@@ -345,7 +345,7 @@ def node_process_plans(state: ProjectState):
     }
 
 # ---  AGENT 3: DETAIL PROCESSOR ---
-def node_process_details(state: ProjectState):
+def node_process_details(state: ProjectState,config):
     """
     Extracts and processes section detail drawings using minerU to build a detail
     library and populate the graph database with detail BOMs.
@@ -446,7 +446,7 @@ def node_process_details(state: ProjectState):
                     }
                     
                     graph_db.add_detail_bom(
-                        project_id=os.path.basename(state["pdf_path"]),
+                        project_id=config["configurable"]["thread_id"],
                         detail_key=key, 
                         title=detail_data.title, 
                         materials_list=detail_data.model_dump()["materials"], 
@@ -479,7 +479,7 @@ def node_process_details(state: ProjectState):
 
                         matches = graph_db.semantic_search(
                             query_text,
-                            project_id=os.path.basename(state["pdf_path"]),
+                            project_id=config["configurable"]["thread_id"],
                             sheet_number=sheet_number,
                             limit=1
                         )
@@ -497,7 +497,7 @@ def node_process_details(state: ProjectState):
                     # 3. STORE using SAME FUNCTION (safe reuse)
 
                     graph_db.add_detail_bom(
-                        project_id=os.path.basename(state["pdf_path"]),
+                        project_id=config["configurable"]["thread_id"],
                         detail_key=f"PLAN::{plan['detail_id']}/{sheet_number}", 
                         title=plan.get("title", "PLAN_RESOLUTION"),
                         materials_list=enriched_symbols, 
@@ -537,7 +537,7 @@ def node_agent_4_merger(state: ProjectState,config):
     """
     logger.info("--- NODE: Agent 4 (Pre-Fetch Vision Estimator) ---")
     
-    project_id = os.path.basename(state["pdf_path"])
+    project_id = config["configurable"]["thread_id"]
     floor_images = state.get("floor_plan_images", [])
     
     # Load Excel Options
@@ -591,7 +591,9 @@ def node_agent_4_merger(state: ProjectState,config):
                 
                 # B. Recursive Lookup (Detail Component -> Schedule)
                 if definition and definition.get("BOM"):
+                    logger.info(f"DEFINITION:{definition}")
                     for item in definition["BOM"]:
+                        logger.info(f"Item : {item}")
                         # Check for "Schedule" or "See Plan" in rule/material
                         rule_text = item.get("qty_rule", "")
                         mat_text = item.get("material", "") or ""
@@ -654,6 +656,24 @@ def node_agent_4_merger(state: ProjectState,config):
     else:
         update_job_status(job_id, "completed")
         update_job_progress(job_id, "completed", "agent_4_merger")
+        # save the BOM in .json file   
+        job_id = config["configurable"]["thread_id"]
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+        PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, "../../../"))
+        base_path = os.getenv("BOM_STORAGE_PATH",  os.path.join(PROJECT_ROOT, "bom_storage"))
+        os.makedirs(base_path, exist_ok=True)
+        file_path = os.path.join(base_path, f"{job_id}.json")
+        data = {
+            "job_id": job_id,
+            "bom": [item.model_dump() for item in all_extracted_items]
+        }
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            logger.info(f"BOM saved successfully at {file_path}")
+        except Exception as e:
+            logger.error(f"Failed to save BOM | job_id={job_id} | error={str(e)}")
+
 
     return {"final_bill_of_materials": {"final_bill_of_materials": [item.model_dump() for item in all_extracted_items]}}   
 

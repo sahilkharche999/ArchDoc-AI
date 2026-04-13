@@ -837,11 +837,17 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS:str,valid_materials_str:str,sheet
     STEP 3 — MATERIAL NAME NORMALIZATION
     ------------------------------------------------------------
 
-    All calculated materials must match EXACTLY one of the VALID MATERIALS LIST.
+    MATERIAL MATCHING RULE (CRITICAL):
 
-    If mismatch:
-    • Choose closest exact valid string.
-    • Do not invent new material names.
+    • If material exists in VALID MATERIAL LIST → use it
+    • If material does NOT exist:
+        - DO NOT discard it
+        - KEEP the original material_size exactly as extracted
+        - Assign default values:
+            lb_per_ft = 0
+            charge_per_lb = 0
+
+    • NEVER remove a material due to mismatch
 
     ------------------------------------------------------------
     STEP 4 — AGGREGATION
@@ -879,7 +885,8 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS:str,valid_materials_str:str,sheet
     {{
     "final_bill_of_materials": [
         {{
-        "description": "HSS 5x5x5/16",
+        "description": "Beam at Grid A",
+        "material_size": "HSS5X5X5/16",
         "total_qty": 4,
         "total_linear_feet": 73.16,
         "logic_trace": "Found 4 columns at grids B-2, C-2."
@@ -888,6 +895,7 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS:str,valid_materials_str:str,sheet
         }},
         {{
         "description": "5/8\" DIA. ANCHOR ROD",
+        "material_size": "ROD5/8",
         "total_qty": 22,
         "total_linear_feet": 33.0,
         "logic_trace": "Hex-1 shear wall 13'-10\". Spacing 16\" O.C. → 11 bolts * 2 walls."
