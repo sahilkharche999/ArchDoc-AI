@@ -837,11 +837,17 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS:str,valid_materials_str:str,sheet
     STEP 3 — MATERIAL NAME NORMALIZATION
     ------------------------------------------------------------
 
-    All calculated materials must match EXACTLY one of the VALID MATERIALS LIST.
+    MATERIAL MATCHING RULE (CRITICAL):
 
-    If mismatch:
-    • Choose closest exact valid string.
-    • Do not invent new material names.
+    • If material exists in VALID MATERIAL LIST → use it
+    • If material does NOT exist:
+        - DO NOT discard it
+        - KEEP the original material_size exactly as extracted
+        - Assign default values:
+            lb_per_ft = 0
+            charge_per_lb = 0
+
+    • NEVER remove a material due to mismatch
 
     ------------------------------------------------------------
     STEP 4 — AGGREGATION

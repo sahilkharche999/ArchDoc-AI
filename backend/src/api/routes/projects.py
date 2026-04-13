@@ -53,7 +53,7 @@ def get_project(job_id: str):
             "job_id": row[0],
             "name": row[1],
             "status": status,
-            "date": row[3],
+            "date": row[4],
             "file_path": f"assets/{row[0]}_structural.pdf",
             "current_step":current_step
         }

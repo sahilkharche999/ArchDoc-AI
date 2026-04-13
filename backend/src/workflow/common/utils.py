@@ -481,8 +481,11 @@ def enrich_bom_with_pricing(bom_items, material_lookup):
 
         material_data = material_lookup.get(material, {})
 
-        lb_per_ft = material_data.get("lb_per_ft", item.get("lb_per_ft", 0))
-        price = material_data.get("price_per_lb", 0)
+        if not material_data:
+            print(f"[WARNING] Material not found in lookup: {material}")
+
+        lb_per_ft = material_data.get("lb_per_ft", 0) if material_data else 0
+        price = material_data.get("price_per_lb", 0) if material_data else 0
 
         item["lb_per_ft"] = lb_per_ft
 
