@@ -522,3 +522,14 @@ def classify_group_image(image_path):
     result = llm_flash.with_structured_output(IngestionOutput).invoke([msg])
 
     return result.type
+    
+def is_detail_ref(text: str) -> bool:
+    if not text:
+        return False
+
+    text = text.strip().upper()
+
+    # Matches: 1/S-3.2, 12/S-10, etc.
+    pattern = r"^\d+/S-\d+(\.\d+)?$"
+
+    return bool(re.match(pattern, text))

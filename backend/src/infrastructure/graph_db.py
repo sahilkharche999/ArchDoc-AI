@@ -164,11 +164,12 @@ class ConstructionGraph:
            raise
 
     def add_detail_bom(
-            self,
+             self,
             project_id,
             detail_key,
             title,
             materials_list,
+            fabrication,        # NEW
             page_num,
             sheet_number
     ):
@@ -178,6 +179,9 @@ class ConstructionGraph:
         """
         # 1. Create rich description for embedding
         # Example: "Detail: 7/S-3.2. Title: Ladder. Contains: MC6x15.1, L4x4"
+
+        bom_json = json.dumps(materials_list)
+        fabrication_json = json.dumps(fabrication)
         mat_text = ", ".join([m["item_name"] for m in materials_list])
         description = f"Detail: {detail_key}. Title: {title}. Contains: {mat_text}"
 
@@ -217,6 +221,9 @@ class ConstructionGraph:
         SET d.sheet = $sheet_number
         SET d.page = $page_num
         SET d.type = "detail"
+
+        SET d.bom = $bom_json
+        SET d.fabrication = $fabrication_json
         
         MERGE (d)-[:FOUND_ON]->(p)
         
@@ -238,7 +245,9 @@ class ConstructionGraph:
                         page_num=page_num,
                         sheet_number=sheet_number,
                         description=description,
-                        vector=vector
+                        vector=vector,
+                        bom_json=bom_json,
+                        fabrication_json=fabrication_json
                     )
                 logger.debug(
             f"Detail BOM added | project_id={project_id} | detail_key={detail_key}"
@@ -278,26 +287,14 @@ class ConstructionGraph:
         MATCH (node)-[:FOUND_ON]->(p:Sheet)
         WHERE node.project = $project_id
         AND ($sheet_number IS NULL OR p.sheet_number = $sheet_number)
-        
-        // 2. Get its Components
-        OPTIONAL MATCH (node)-[r:CONTAINS]->(c:Component)
-        
-        // 3. RECURSIVE LOOKUP: Does this component match a Schedule?
-        // We look for a Schedule Rule that has a similar name to the Component
-        OPTIONAL MATCH (rule:Definition:Schedule)-[:FOUND_ON]->(p)
-        WHERE rule.project = $project_id
-        AND toLower(rule.name) CONTAINS toLower(c.name)
 
         RETURN 
             node.id as ID,
             node.title as Title,
             node.row as Rows,
             node.columns as Columns,
-            collect({
-                material: c.name,
-                qty_rule: r.qty_rule,
-                linked_schedule: rule.row
-            }) as BOM,
+            node.bom as BOM,
+            node.fabrication as fabrication,
             coalesce(score, 0.0) as score
         """
         with self.driver.session() as session:
@@ -309,8 +306,52 @@ class ConstructionGraph:
                 limit=limit
             )
             records = list(result)
-            logger.debug(f"Search results count | count={len(records)}")
-            return [r.data() for r in records]
+            final = []
+            for r in records:
+                data = r.data()
 
+                if data.get("BOM"):
+                    data["BOM"] = json.loads(data["BOM"])
+                    logger.debug(f"PARSED BOM:{ data['BOM']}")
+
+                if data.get("fabrication"):
+                    data["fabrication"] = json.loads(data["fabrication"])
+                    logger.debug(f"PARSED BOM:{ data['BOM']}")
+
+                final.append(data)
+            logger.debug(f"Search results count | count={len(final)}")
+            return final
+   
+    def get_definition_by_id(self, detail_id, project_id):
+        query = """
+        MATCH (n:Definition)
+        WHERE n.id = $id AND n.project = $project_id
+        RETURN 
+            n.id as ID,
+            n.title as Title,
+            n.row as Rows,
+            n.columns as Columns,
+            n.bom as BOM,
+            n.fabrication as fabrication
+        LIMIT 1
+        """
+
+        with self.driver.session() as session:
+            result = session.run(query, id=detail_id, project_id=project_id)
+            record = result.single()
+
+            if not record:
+                return None
+
+            data = record.data()
+
+
+            if data.get("BOM"):
+                data["BOM"] = json.loads(data["BOM"])
+
+            if data.get("fabrication"):
+                data["fabrication"] = json.loads(data["fabrication"])
+
+            return data
 
 graph_db = ConstructionGraph()

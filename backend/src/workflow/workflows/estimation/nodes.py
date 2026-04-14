@@ -28,7 +28,7 @@ from src.workflow.common.utils import (
     convert_specific_page_to_png,
     load_material_weights,              
     minerU_pdf_creating_extration,       
-    classify_group_image     
+    is_detail_ref     
     )
 
 from src.infrastructure.graph_db import graph_db
@@ -444,12 +444,13 @@ def node_process_details(state: ProjectState,config):
                     "page": page_num,
                     "data": detail_data.model_dump()
                     }
-                    
+                    detail_dict = detail_data.model_dump()
                     graph_db.add_detail_bom(
                         project_id=config["configurable"]["thread_id"],
                         detail_key=key, 
-                        title=detail_data.title, 
-                        materials_list=detail_data.model_dump()["materials"], 
+                        title=detail_dict["title"],
+                        materials_list=detail_dict["materials"],
+                        fabrication=detail_dict["fabrication"], 
                         page_num=page_num,
                         sheet_number=sheet_number
                     )
@@ -576,53 +577,77 @@ def node_agent_4_merger(state: ProjectState,config):
     
         enriched_symbols = []
         for sym in raw_symbols:
+            logger.info(f"RAW SYMBOL : {sym}")
             query_text = f"{sym.get('shape','')} {sym.get('text_content','')}"
-            
+            logger.info(f"query text : {query_text}")
             # A. Primary Lookup (Symbol -> Detail/Rule)
-            matches = graph_db.semantic_search(query_text, project_id,sheet_number=sheet_number,limit=1)
+            # matches = graph_db.semantic_search(query_text, project_id,sheet_number=sheet_number,limit=1)
+            # logger.info(f"MATCHES: {matches}")
+
+            query_text = sym.get("text_content", "").strip()
+            query_text = query_text.upper()
             
             definition = None
-            
-            if matches :
-                score = matches[0].get("score")
-                logger.debug(f"Primary match score: {score}")
-                if isinstance(score, (int, float)) and score > 0.80:
-                   definition = matches[0]
-                
-                # B. Recursive Lookup (Detail Component -> Schedule)
-                if definition and definition.get("BOM"):
-                    logger.info(f"DEFINITION:{definition}")
+
+            if is_detail_ref(query_text):
+                logger.info(f"Using DIRECT LOOKUP for {query_text}")
+
+                definition = graph_db.get_definition_by_id(
+                    query_text,
+                    project_id
+                )
+
+            else:
+                logger.info(f"Using SEMANTIC SEARCH for {query_text}")
+
+                matches = graph_db.semantic_search(
+                    query_text,
+                    project_id,
+                    sheet_number=sheet_number,
+                    limit=1
+                )
+
+                if matches:
+                    definition = matches[0]
+
+
+
+            if definition:
+                logger.info(f"DEFINITION FOUND: {definition}")
+
+                if definition.get("BOM") is not None:
                     for item in definition["BOM"]:
                         logger.info(f"Item : {item}")
-                        # Check for "Schedule" or "See Plan" in rule/material
+
                         rule_text = item.get("qty_rule", "")
-                        mat_text = item.get("material", "") or ""
+                        mat_text = item.get("item_name", "") or ""
+
+                        logger.info(f"Material text used: {mat_text}")
+
                         schedule_keywords = ["schedule", "see plan", "see sched", "per schedule"]
                         text_blob = f"{rule_text} {mat_text}".lower()
-                        if any(k in text_blob for k in schedule_keywords):
-                            logger.debug(f"    > Resolving Reference: {mat_text}")
-                            
-                            # Search for the Schedule (Filter by Label="Schedule" if possible)
-                            # Using the material name as the query (e.g. "LOOSE LINTEL")
-                            sub_matches = graph_db.semantic_search(mat_text, project_id,sheet_number=sheet_number, limit=1)
-                            
-                            if sub_matches:
-                                sub_score = sub_matches[0].get("score")
-                                logger.debug(f"Schedule match score: {sub_score}")
-                                if isinstance(sub_score, (int, float)) and sub_score > 0.50:
-                                     schedule_obj = sub_matches[0]
-                                else:
-                                    schedule_obj = None
 
-                                if schedule_obj:         
-                                  item["linked_schedule_data"] = {
+                        if any(k in text_blob for k in schedule_keywords) and mat_text:
+                            logger.debug(f"    > Resolving Reference: {mat_text}")
+
+                            sub_matches = graph_db.semantic_search(
+                                mat_text,
+                                project_id,
+                                sheet_number=sheet_number,
+                                limit=1
+                            )
+
+                            if sub_matches:
+                                schedule_obj = sub_matches[0]
+
+                                item["linked_schedule_data"] = {
                                     "schedule_id": schedule_obj.get("ID"),
                                     "schedule_name": schedule_obj.get("Name"),
                                     "columns": schedule_obj.get("Columns"),
                                     "rows": schedule_obj.get("Rows"),
                                     "sheet": schedule_obj.get("Sheet")
                                 }
-                                  
+
                                 logger.debug(f"      -> Found schedule: {schedule_obj.get('ID')}")
 
             # Attach the fully enriched definition to the symbol
