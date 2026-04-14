@@ -343,8 +343,9 @@ def prompt_for_map_page_layout():
     map_page_layout_prompt = f"""
     You are a Forensic Layout Analysis Engine.
 
-    You are analyzing a single structural drawing sheet that has already been parsed
-    into structured components (Images + Text Blocks) by MinerU.
+    You are analyzing a structural drawing sheet using:
+    1. Full Page Layout Image
+    2. Parsed JSON items (images + text + bbox)
 
     Your job is NOT to extract materials.
     Your job is to reconstruct the visual grouping logic of the page.
@@ -377,24 +378,18 @@ def prompt_for_map_page_layout():
     STEP 1 — IDENTIFY TITLE ANCHORS
     -------------------------
 
-    Scan all TEXT items.
+    From JSON text items:
 
-    Identify which ones are Titles.
+    A Title usually:
+    • Contains: DETAIL, SECTION, ELEVATION, TYP
+    • May include bubble ref: "7/S-3.2"
+    • Usually BELOW drawings
 
-    A Title typically:
-    • Contains words like “DETAIL”, “SECTION”, “TYP.”, “ELEVATION”
-    • Often has a bubble reference (e.g. 7/S-3.2)
-    • Is positioned at the bottom of a detail cluster
+    Extract:
+    - detail_id (e.g. "7/S-3.2")
+    - title text
 
-    CRITICAL:
-    Extract the FULL detail reference exactly as written:
-    Example:
-        "7/S-3.2"
-        "3/S-4.1"
-
-    This becomes the `detail_id`.
-
-    Each Title becomes an ANCHOR.
+    Mark these as anchors
 
     -------------------------
     STEP 2 — SPATIAL GROUPING
@@ -420,9 +415,40 @@ def prompt_for_map_page_layout():
     - Bounding proximity
 
     If a drawing appears above a title and is not closer to another title, it belongs to that title.
+    ------------------------------------------------------------
+    ### STEP 3 — BBOX-TO-IMAGE ALIGNMENT (CRITICAL)
+
+    You MUST NOT search entire image randomly.
+
+    For each image:
+    → Use its bbox
+    → Search for title ONLY near that region
+
+    Search order:
+    1. Below bbox
+    2. Above bbox
+    3. Nearby horizontal
+
+    ------------------------------------------------------------
+    ### STEP 4 — FALLBACK TITLE DETECTION
+
+    If NO title in JSON:
+
+    1. Use bbox to locate region in full image
+    2. Visually find nearest title text
+
+    If found:
+    → assign detail_id
+
+    If NOT found:
+    → assign fallback:
+      "UNKNOWN_<json_id>"
+
+    CRITICAL:
+    Do NOT ignore such details.
 
     -------------------------
-    STEP 3 — HANDLE FRAGMENTATION
+    STEP 5 — HANDLE FRAGMENTATION
     -------------------------
 
     MinerU may have:
@@ -435,7 +461,7 @@ def prompt_for_map_page_layout():
     Do NOT create separate DetailGroups for fragments of the same unit.
 
     -------------------------
-    STEP 4 — FINAL GROUP CONSTRUCTION
+    STEP 6 — FINAL GROUP CONSTRUCTION
     -------------------------
 
     For each identified Title:
@@ -449,6 +475,12 @@ def prompt_for_map_page_layout():
 
     If a Title has no associated images, still return it.
     If an image has no clear Title, ignore it.
+
+    ------------------------------------------------------------
+    ### ZERO-HALLUCINATION RULE
+
+    DO NOT invent titles.
+    If not clearly visible → use UNKNOWN.
 
     ------------------------------------------------------------
     ### OUTPUT FORMAT
@@ -497,35 +529,42 @@ def prompt_for_extract_single_detail(group_title:str,group_detail_id:str):
     You must behave like an experienced steel detailer,
     not a summarizer.
 
+    ### STRICT VISUAL EXTRACTION MODE (CRITICAL)
+
+    You are performing MATERIAL TAKEOFF from a drawing.
+
+    You are NOT allowed to:
+    - infer missing materials
+    - assume standard components
+    - complete partial systems
+
+    You MUST:
+    - extract ONLY what is explicitly visible in the image
+    - skip anything unclear
+
+    If a material is NOT clearly visible:
+    → DO NOT include it
+
     ------------------------------------------------------------
     ### MULTIMODAL CHAIN-OF-THOUGHT PROCESS
 
     -------------------------
-    STEP 1 — UNDERSTAND THE DETAIL TYPE
+    STEP 1 — PRIMARY MATERIAL EXTRACTION (FROM IMAGE)
     -------------------------
+    Inspect images carefully.
 
-    Visually analyze:
+    Extract ONLY visible material callouts:
 
-    • Is this a ladder?
-    • A lintel?
-    • A base plate?
-    • A beam connection?
-    • A footing?
-
-    Understand what structural system this represents.
-    This determines how to interpret quantity logic.
-
-    -------------------------
-    STEP 2 — READ LEADER LINES (PRIMARY SOURCE)
-    -------------------------
-
-    Inspect the provided images.
-
-    Look at:
+    Look for:
     • Leader arrows
-    • Callout tags
-    • Table rows
-    • Dimension references
+    • Text near arrows
+    • Labels on components
+    • Table entries inside detail
+
+    Extract:
+    • Material size (e.g., L4X4X1/4, ROD3/4)
+    • Length if explicitly written
+    • Spacing rules (e.g., @ 12" O.C.)
 
     CRITICAL RULE:
     Extract material names EXACTLY AS WRITTEN.
@@ -546,6 +585,12 @@ def prompt_for_extract_single_detail(group_title:str,group_detail_id:str):
     - Rule: Normalize to `ROD[size]`.
     - `item_name` = `ROD3/4` or `ROD5/8`
     - `piece_length_ft` = null (unless an explicit length like `X 2'-0"` is attached)
+    
+    Spacing (e.g., @ 12" O.C.) is NOT length.
+    DO NOT convert spacing into piece_length_ft.
+    If only spacing is present:
+    → piece_length_ft = null
+    → qty_rule must contain spacing logic
 
     STRICT ACTIONS:
     1. ALWAYS capitalize lowercase "x" to "X" in `item_name`.
@@ -561,23 +606,33 @@ def prompt_for_extract_single_detail(group_title:str,group_detail_id:str):
     Bad: "3/4 inch rod"
     Good: "ROD3/4"
 
+    IGNORE:
+    • Geometry without labels
+    • Assumed components
+    • Anything not explicitly written
+
     -------------------------
-    STEP 3 — READ NOTES
+    STEP 2 - MATERIAL EVIDENCE RULE (CRITICAL)
     -------------------------
 
-    Analyze the provided text_blocks.
+    For EVERY material:
 
-    Look for:
-    • Welding instructions
-    • Bolt sizes
-    • Spacing rules
-    • Typical notes
-    • Connection instructions
+    You MUST be able to point to exact visible text in the image.
 
-    Determine if they apply to:
-    • Entire detail
-    • Specific material
-    • Fabrication only
+    If you cannot see the exact text:
+    → DO NOT include that material
+
+    -------------------------
+    STEP 3 — READ NOTES(LOW PRIORITY)
+    -------------------------
+
+    Notes are secondary.
+
+    Use notes ONLY if:
+    - They directly reference a visible material
+    - They do NOT introduce new materials
+
+    DO NOT create materials from notes alone.
 
     -------------------------
     STEP 4 — DEFINE QUANTITY LOGIC
@@ -623,15 +678,37 @@ def prompt_for_extract_single_detail(group_title:str,group_detail_id:str):
     STEP 6 — VISUAL REASONING TRACE
     -------------------------
 
-    Explain briefly:
+    Return ONLY the exact text seen in the image.
 
-    List ONLY the text that is explicitly visible in the drawing
-    that supports the extracted materials.
+    Examples:
+    "L4X4X1/4 X 0'-3\""
+    "3/4\" DIA ROD @ 12\" O.C."
 
-    Do NOT interpret structural behavior.
-    Do NOT explain engineering logic.
+    DO NOT explain.
+    DO NOT interpret.
+    ONLY quote visible text.
     
     ------------------------------------------------------------
+    ### UNKNOWN DETAIL MODE
+
+    If title is UNKNOWN:
+
+    - Do NOT infer detail type
+    - Do NOT assume system
+    - Extract ONLY visible material text
+
+    No interpretation allowed
+    
+    ### FINAL VALIDATION CHECK
+
+    Before returning:
+
+    For each material:
+    → Verify it exists in visible image text
+
+    If not:
+    → REMOVE it
+
     ### OUTPUT FORMAT
 
     Return a single DetailExtraction object:
