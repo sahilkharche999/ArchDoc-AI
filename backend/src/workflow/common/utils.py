@@ -15,7 +15,7 @@ from langchain_core.messages import HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pdf2image import convert_from_path
 from src.workflow.workflows.estimation.prompt import (
-    prompt_for_node_process_plans,prompt_for_extract_single_detail
+    prompt_for_node_process_plans,prompt_for_extract_single_detail,prompt_for_map_page_layout
     )
 from src.workflow.common.schemas import (
     IngestionOutput 
@@ -44,8 +44,8 @@ def map_page_layout(pdf_layout_path: str, json_path: str, images_dir: str):
         with open(json_path, 'r') as f:
             json_data = json.load(f)
             # Simplify JSON for prompt (just types and bboxes)
-            simple_json = [{"id": i, "type": x["type"], "bbox": x.get("bbox"), "text_preview": x.get("text", "")[:50]} for
-                        i, x in enumerate(json_data)]
+            simple_json = [{"id": i, "type": x["type"], "bbox": x.get("bbox"), "text_preview": x.get("text", "")[:50],"img_path": x.get("img_path", None)} 
+                          for i, x in enumerate(json_data)]
             json_string = json.dumps(simple_json, indent=2)
     except Exception as e:
         logger.error(f"[Layout] Failed to load JSON | path={json_path} | error={str(e)}")
@@ -61,26 +61,7 @@ def map_page_layout(pdf_layout_path: str, json_path: str, images_dir: str):
         return []
 
     # 3. Prompt
-    prompt = f"""
-    You are a Layout Analysis Engine.
-    I have parsed a PDF page into a list of items (Images, Text).
-    
-    ### INPUTS:
-    1. **Layout Image:** Shows the visual arrangement.
-    2. **JSON List:** The detected items with IDs.
-    
-    ### TASK:
-    Group these items into **Logical Detail Units**.
-    - A "Detail Unit" usually has a **Title** (Text) at the bottom.
-    - Above the title, there are **Drawings** (Images) and **Notes** (Text).
-    - **CRITICAL:** One Detail might have MULTIPLE images (e.g. a Plan View + a Section View + a Table). Group them all under the same Title.
-    
-    ### OUTPUT:
-    Return a list of `DetailGroup` objects.
-    - `detail_id`: Extract the number from the bubble (e.g. "7/S-3.2").
-    - `image_files`: List the filenames of the images in this group (look at the JSON 'img_path').
-    - `text_blocks`: List the full text of any notes in this group.
-    """
+    prompt = prompt_for_map_page_layout()
 
     msg = HumanMessage(content=[
         {"type": "text", "text": prompt},
@@ -170,7 +151,7 @@ def extract_single_detail(group: DetailGroup, images_dir: str, temp_plan_like_de
 
     # B. Add Specific Images
     for img_path in detail_images:
-        b64 = load_image_base64(Image.open(img_path))
+        b64 = load_image_base64(img_path)
         payload.append({
             "type": "image_url",
             "image_url": {"url": f"data:image/png;base64,{b64}"}
