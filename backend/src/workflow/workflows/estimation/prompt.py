@@ -8,24 +8,6 @@ def prompt_for_node_classify_pages():
     - "floor": If the page shows a Plan View, Foundation Plan, or Roof Framing Plan.
     - "section": If the page shows Detail Drawings, Wall Sections, or Connection Cuts.
 
-    ------------------------------------------------------------
-    CRITICAL PRIORITY RULE (VERY IMPORTANT):
-
-    If ANY part of the page contains a Plan View
-    (e.g., grid lines, walls, framing layout, dimensions, building layout),
-
-    THEN you MUST return:
-    {"drawing_type": "floor"}
-
-    EVEN IF:
-    - The page also contains sections
-    - The page also contains details
-    - The plan view is only on a portion of the sheet
-
-    Only return "section" if NO plan view exists on the page.
-
-    ------------------------------------------------------------
-
     **OUTPUT FORMAT:**
     You must return a JSON object. Do not return just the word.
     Example: {"drawing_type": "floor"}
