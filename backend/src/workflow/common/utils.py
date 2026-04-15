@@ -15,7 +15,7 @@ from langchain_core.messages import HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pdf2image import convert_from_path
 from src.workflow.workflows.estimation.prompt import (
-    prompt_for_node_process_plans,prompt_for_extract_single_detail,prompt_for_map_page_layout
+    prompt_for_node_process_plans,prompt_for_extract_single_detail,prompt_for_map_page_layout,prompt_for_classify_image_as_plan_detail
     )
 from src.workflow.common.schemas import (
     IngestionOutput 
@@ -80,15 +80,7 @@ def map_page_layout(pdf_layout_path: str, json_path: str, images_dir: str):
 
 def classify_image_as_plan(image_path):
 
-    prompt = """
-    Classify this image:
-
-    - PLAN_VIEW → layout, grid, structural plan
-    - DETAIL → component-level drawing
-
-    Return ONLY JSON:
-    {"type": "PLAN_VIEW"} or {"type": "DETAIL"}
-    """
+    prompt =prompt_for_classify_image_as_plan_detail()
 
     msg = HumanMessage(content=[
         {"type": "text", "text": prompt},
@@ -101,12 +93,15 @@ def classify_image_as_plan(image_path):
 
         if "plan_view" in text:
             return "PLAN_VIEW"
-        return "DETAIL"
-
+        elif "dependent_detail" in text:
+            return "DEPENDENT_DETAIL"
+        else:
+            return "INDEPENDENT_DETAIL"
+        
     except Exception:
-        return "DETAIL"  # safe fallback
+        return "DETAIL" 
 
-def extract_single_detail(group: DetailGroup, images_dir: str, temp_plan_like_details: list, sheet_number: str, page_num: int):
+def extract_single_detail(group: DetailGroup, images_dir: str, temp_plan_like_details: list,temp_dependent_detail_images:list, sheet_number: str, page_num: int):
     """
     Analyzes a SINGLE detail group (specific images + text) to get the BOM.
     Used in the Floor plan agent 
@@ -116,6 +111,7 @@ def extract_single_detail(group: DetailGroup, images_dir: str, temp_plan_like_de
     payload = []
     plan_images = []
     detail_images = []
+    dependent_detail_images=[]
 
       # STEP 1 — Classify each image
     for img_file in group.image_files:
@@ -129,6 +125,8 @@ def extract_single_detail(group: DetailGroup, images_dir: str, temp_plan_like_de
 
         if img_type == "PLAN_VIEW":
             plan_images.append(full_path)
+        elif img_type == "DEPENDENT_DETAIL":
+            dependent_detail_images.append(full_path)
         else:
             detail_images.append(full_path)
 
@@ -139,11 +137,23 @@ def extract_single_detail(group: DetailGroup, images_dir: str, temp_plan_like_de
         temp_plan_like_details.append({
             "detail_id": group.detail_id,
             "sheet": sheet_number,
-            "image_path": plan_images[0],  # pick first
+            "image_path": plan_images, 
             "page": page_num,
             "title": group.title 
         })
-
+    
+    if len(dependent_detail_images)>0:
+        logger.debug(f"dependent_detail_images detected in group {group.detail_id}")
+        temp_dependent_detail_images.append({
+            "detail_id": group.detail_id,
+            "sheet": sheet_number,
+            "image_path": dependent_detail_images, 
+            "page": page_num,
+            "title": group.title 
+        }
+        )
+    if len(detail_images) == 0:
+        return None 
 
     # A. Prompt
     prompt = prompt_for_extract_single_detail(group_title=group.title,group_detail_id=group.detail_id)

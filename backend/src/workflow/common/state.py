@@ -9,3 +9,4 @@ class ProjectState(TypedDict):
     general_rules: str
     final_bill_of_materials: Dict
     floor_plan_images: List[str]
+    detected_details: List[Dict[str, Any]]

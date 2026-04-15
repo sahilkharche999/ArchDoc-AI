@@ -491,6 +491,83 @@ def prompt_for_map_page_layout():
     """
     return  map_page_layout_prompt
 
+def prompt_for_classify_image_as_plan_detail():
+    prompt="""
+      Classify this construction drawing image into EXACTLY ONE of the following types:
+
+      ------------------------------------------------------------
+      CASE 1 → PLAN_VIEW
+      ------------------------------------------------------------
+      This is a full or partial layout of a structure.
+
+      Visual clues:
+      - Grid lines (A, B, C / 1, 2, 3)
+      - Walls, beams, columns arranged spatially
+      - Dimension lines across large areas
+      - Floor plan / foundation plan / framing plan
+
+      IMPORTANT:
+      Even if callouts exist, if the drawing represents a spatial layout → PLAN_VIEW
+
+      ------------------------------------------------------------
+      CASE 2 → DEPENDENT_DETAIL
+      ------------------------------------------------------------
+      This is a zoomed-in construction detail BUT depends on OTHER details.
+
+      Visual clues:
+      - Contains callout bubbles or references such as:
+        "G9", "K1", "G9/S-501", "3/S-3.4", "5/S-2.1"
+      - These references indicate:
+        → "look somewhere else for full definition"
+      - The drawing is NOT self-contained
+
+      CRITICAL RULE:
+      If ANY reference to another detail/sheet is visible:
+      → classify as DEPENDENT_DETAIL
+
+      Examples:
+      - G9 / S-501
+      - 3 / S-3.4
+      - K1
+      - Any bubble with sheet reference
+
+      ------------------------------------------------------------
+      CASE 3 → INDEPENDENT_DETAIL
+      ------------------------------------------------------------
+      This is a fully self-contained detail.
+
+      Visual clues:
+      - Zoomed-in drawing of a component (connection, hatch, footing, etc.)
+      - Contains all material callouts directly (bars, plates, rods, etc.)
+      - NO references to other details or sheets
+
+      ------------------------------------------------------------
+      STRICT DECISION RULES
+
+      1. If grid/layout → PLAN_VIEW
+      2. Else if ANY callout/reference exists → DEPENDENT_DETAIL
+      3. Else → INDEPENDENT_DETAIL
+
+      ------------------------------------------------------------
+      OUTPUT FORMAT
+
+      Return ONLY valid JSON:
+
+      {"type": "PLAN_VIEW"}
+
+      OR
+
+      {"type": "DEPENDENT_DETAIL"}
+
+      OR
+
+      {"type": "INDEPENDENT_DETAIL"}
+
+      No explanation.
+
+     """
+    return prompt
+
 def prompt_for_extract_single_detail(group_title:str,group_detail_id:str):
     extract_single_detail_prompt = f"""
     You are a Senior Structural Detailer performing forensic material extraction.

@@ -3,6 +3,7 @@ import json
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
+from src.workflow.common.schemas import DetailExtraction
 import pdfplumber
 from pypdf import PdfReader, PdfWriter
 from src.workflow.common.state import ProjectState
@@ -16,7 +17,8 @@ from src.workflow.workflows.estimation.prompt import (
     prompt_for_node_classify_pages,
     prompt_for_node_process_plans,
     prompt_node_process_text_rules,
-    prompt_for_agent_4_merger
+    prompt_for_agent_4_merger,
+    prompt_for_extract_single_detail
     )
 from src.workflow.common.utils import (
     crop_union_tables,
@@ -375,6 +377,11 @@ def node_process_details(state: ProjectState,config):
     detail_library = state.get("detail_library", {})
     section_pages = [p for p, t in state["page_map"].items() if t == "section"]
     logger.debug(f"Length of the section page : {len(section_pages)}")
+    
+    detected_details = state.get("detected_details", [])
+   
+    logger.info(f"--- Processing {len(detected_details)} detected floor-plan details ---")
+
     for page_num in section_pages:
         logger.debug(f"Processing Page {page_num}...")
         
@@ -412,9 +419,9 @@ def node_process_details(state: ProjectState,config):
         logger.debug("   > Step 1: Mapping Layout...")
         if not os.path.exists(layout_pdf_path) or not os.path.exists(json_path):
             logger.warning(
-    f"MinerU output missing for page {page_num}. "
-    f"layout={layout_pdf_path}, json={json_path}"
-)
+                f"MinerU output missing for page {page_num}. "
+                f"layout={layout_pdf_path}, json={json_path}"
+            )
             continue
         detail_groups = map_page_layout(layout_pdf_path, json_path, images_dir)
 
@@ -425,6 +432,7 @@ def node_process_details(state: ProjectState,config):
    
         logger.debug(f"   > Step 2: Extracting {len(detail_groups)} details...") 
         temp_plan_like_details = []
+        temp_dependent_detail_images=[]
         for group in detail_groups:
                 # Call the extractor for this specific group
                 logger.info(f" > Extracting detail: {group.detail_id}")
@@ -432,6 +440,7 @@ def node_process_details(state: ProjectState,config):
                     group,
                     images_dir,
                     temp_plan_like_details,
+                    temp_dependent_detail_images,
                     sheet_number,
                     page_num
                 )
@@ -454,8 +463,148 @@ def node_process_details(state: ProjectState,config):
                         page_num=page_num,
                         sheet_number=sheet_number
                     )
+        
+    for plan in temp_dependent_detail_images:
+                    img_path = plan["image_path"]
+                    plan_sheet = plan["sheet"]
+                    
+                    
+                    all_extracted_items = []
 
-        for plan in temp_plan_like_details:
+                    logger.debug(f"Processing plan image: {img_path}")
+
+                    # 1. Run DINO
+                    try:
+                        raw_symbols = detect_and_read_symbols(
+                            img_path,
+                            output_dir=os.path.join(os.path.dirname(img_path), "symbols")
+                        )
+                        raw_symbols = [s for s in raw_symbols if s.get("text_content") != "Unknown"]
+                    except Exception as e:
+                        logger.error(f"DINO failed: {e}")
+                        continue
+
+                    enriched_symbols = []
+
+                    # 2. Semantic search
+                    for sym in raw_symbols:
+                        query_text = sym.get("text_content", "").strip()
+                        query_text = query_text.upper()
+
+
+                        definition = None
+
+                        if is_detail_ref(query_text):
+                            logger.info(f"Using DIRECT LOOKUP for {query_text}")
+
+                            definition = graph_db.get_definition_by_id(
+                                query_text,
+                                config["configurable"]["thread_id"]
+                            )
+                        else:
+                            logger.info(f"Using SEMANTIC SEARCH for {query_text}")
+
+                            matches = graph_db.semantic_search(
+                                query_text,
+                                project_id=config["configurable"]["thread_id"],
+                                sheet_number=plan_sheet,   
+                                limit=1
+                            )
+
+                            if matches:
+                                definition = matches[0]
+
+                        if definition:
+                            logger.info(f"DEFINITION FOUND: {definition}")
+
+                            if definition.get("BOM") is not None:
+                                for item in definition["BOM"]:
+                                    logger.info(f"Item : {item}")
+
+                                    rule_text = item.get("qty_rule", "")
+                                    mat_text = item.get("item_name", "") or ""
+
+                                    logger.info(f"Material text used: {mat_text}")
+
+                                    schedule_keywords = ["schedule", "see plan", "see sched", "per schedule"]
+                                    text_blob = f"{rule_text} {mat_text}".lower()
+
+                                    if any(k in text_blob for k in schedule_keywords) and mat_text:
+                                        logger.debug(f"    > Resolving Reference: {mat_text}")
+
+                                        sub_matches = graph_db.semantic_search(
+                                            mat_text,
+                                            plan["title"],
+                                            sheet_number=sheet_number,
+                                            limit=1
+                                        )
+
+                                        if sub_matches:
+                                            schedule_obj = sub_matches[0]
+
+                                            item["linked_schedule_data"] = {
+                                                "schedule_id": schedule_obj.get("ID"),
+                                                "schedule_name": schedule_obj.get("Name"),
+                                                "columns": schedule_obj.get("Columns"),
+                                                "rows": schedule_obj.get("Rows"),
+                                                "sheet": schedule_obj.get("Sheet")
+                                            }
+
+                                            logger.debug(f"      -> Found schedule: {schedule_obj.get('ID')}")
+
+
+                        sym["linked_definition"] = definition
+                        enriched_symbols.append(sym)
+                    logger.debug(f"    > Enriched {len(enriched_symbols)} symbols with Graph Data.")
+                    system_prompt =prompt_for_extract_single_detail()  
+                    dependency_context = f"""
+                    ### ADDITIONAL CONTEXT — RESOLVED DEPENDENCIES
+
+                    You are given pre-resolved data from referenced callouts.
+
+                    Use this ONLY if:
+                    - The image contains matching callout references (e.g., G9, K1)
+                    - The dependency data corresponds to that reference
+
+                    If no matching callout is visible:
+                    → IGNORE this section completely
+
+                    DO NOT double count materials.
+                    DO NOT assume relationships unless clearly referenced.
+                    """
+                    b64 = load_image_base64(img_path) 
+                    msg = HumanMessage(content=[
+                        {"type": "text", "text": dependency_context},
+                        {"type": "text", "text": system_prompt},
+                        {"type": "text", "text": f"DEPENDENCY DATA:\n{json.dumps(enriched_symbols)}"},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                    ])
+
+                    try:
+                        result = llm_pro.with_structured_output(FinalEstimation).invoke([msg])
+                        
+                        if result.final_bill_of_materials:
+                            logger.debug(f"    > Extracted {len(result.final_bill_of_materials)} items.")
+                            all_extracted_items=result.final_bill_of_materials
+                            
+                    except Exception as e:
+                        logger.error(f"Agent 4 failed: {e}")
+
+                    # 3. STORE using SAME FUNCTION (safe reuse)
+
+                    graph_db.add_detail_bom(
+                        project_id=config["configurable"]["thread_id"],
+                        detail_key=f"PLAN::{plan['detail_id']}/{sheet_number}", 
+                        title=plan.get("title", "PLAN_RESOLUTION"),
+                        materials_list=all_extracted_items[0], 
+                        page_num=plan["page"],
+                        sheet_number=plan_sheet
+                    )
+
+
+
+   
+    for plan in temp_plan_like_details:
                     img_path = plan["image_path"]
                     plan_sheet = plan["sheet"]
 
@@ -502,8 +651,82 @@ def node_process_details(state: ProjectState,config):
                             if matches:
                                 definition = matches[0]
 
+                        if definition:
+                            logger.info(f"DEFINITION FOUND: {definition}")
+
+                            if definition.get("BOM") is not None:
+                                for item in definition["BOM"]:
+                                    logger.info(f"Item : {item}")
+
+                                    rule_text = item.get("qty_rule", "")
+                                    mat_text = item.get("item_name", "") or ""
+
+                                    logger.info(f"Material text used: {mat_text}")
+
+                                    schedule_keywords = ["schedule", "see plan", "see sched", "per schedule"]
+                                    text_blob = f"{rule_text} {mat_text}".lower()
+
+                                    if any(k in text_blob for k in schedule_keywords) and mat_text:
+                                        logger.debug(f"    > Resolving Reference: {mat_text}")
+
+                                        sub_matches = graph_db.semantic_search(
+                                            mat_text,
+                                            plan["title"],
+                                            sheet_number=sheet_number,
+                                            limit=1
+                                        )
+
+                                        if sub_matches:
+                                            schedule_obj = sub_matches[0]
+
+                                            item["linked_schedule_data"] = {
+                                                "schedule_id": schedule_obj.get("ID"),
+                                                "schedule_name": schedule_obj.get("Name"),
+                                                "columns": schedule_obj.get("Columns"),
+                                                "rows": schedule_obj.get("Rows"),
+                                                "sheet": schedule_obj.get("Sheet")
+                                            }
+
+                                            logger.debug(f"      -> Found schedule: {schedule_obj.get('ID')}")
+
+
                         sym["linked_definition"] = definition
                         enriched_symbols.append(sym)
+
+                    logger.debug(f"    > Enriched {len(enriched_symbols)} symbols with Graph Data.")
+                    system_prompt =prompt_for_extract_single_detail()  
+                    dependency_context = f"""
+                    ### ADDITIONAL CONTEXT — RESOLVED DEPENDENCIES
+
+                    You are given pre-resolved data from referenced callouts.
+
+                    Use this ONLY if:
+                    - The image contains matching callout references (e.g., G9, K1)
+                    - The dependency data corresponds to that reference
+
+                    If no matching callout is visible:
+                    → IGNORE this section completely
+
+                    DO NOT double count materials.
+                    DO NOT assume relationships unless clearly referenced.
+                    """
+                    b64 = load_image_base64(img_path) 
+                    msg = HumanMessage(content=[
+                        {"type": "text", "text": dependency_context},
+                        {"type": "text", "text": system_prompt},
+                        {"type": "text", "text": f"DEPENDENCY DATA:\n{json.dumps(enriched_symbols)}"},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                    ])
+
+                    try:
+                        result = llm_pro.with_structured_output(FinalEstimation).invoke([msg])
+                        
+                        if result.final_bill_of_materials:
+                            logger.debug(f"    > Extracted {len(result.final_bill_of_materials)} items.")
+                            all_extracted_items=result.final_bill_of_materials
+                            
+                    except Exception as e:
+                        logger.error(f"Agent 4 failed: {e}")
 
                     # 3. STORE using SAME FUNCTION (safe reuse)
 
@@ -511,10 +734,11 @@ def node_process_details(state: ProjectState,config):
                         project_id=config["configurable"]["thread_id"],
                         detail_key=f"PLAN::{plan['detail_id']}/{sheet_number}", 
                         title=plan.get("title", "PLAN_RESOLUTION"),
-                        materials_list=enriched_symbols, 
+                        materials_list=all_extracted_items[0], 
                         page_num=plan["page"],
                         sheet_number=plan_sheet
                     )
+    
 
     return {"detail_library": detail_library, "plan_like_details": temp_plan_like_details }
 
