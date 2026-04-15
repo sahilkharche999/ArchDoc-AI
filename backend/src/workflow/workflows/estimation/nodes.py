@@ -476,20 +476,30 @@ def node_process_details(state: ProjectState,config):
 
                     # 2. Semantic search
                     for sym in raw_symbols:
-                        query_text = f"{sym.get('shape','')} {sym.get('text_content','')}"
+                        query_text = sym.get("text_content", "").strip()
+                        query_text = query_text.upper()
 
-                        matches = graph_db.semantic_search(
-                            query_text,
-                            project_id=config["configurable"]["thread_id"],
-                            sheet_number=sheet_number,
-                            limit=1
-                        )
 
                         definition = None
 
-                        if matches:
-                            score = matches[0].get("score")
-                            if score and score > 0.8:
+                        if is_detail_ref(query_text):
+                            logger.info(f"Using DIRECT LOOKUP for {query_text}")
+
+                            definition = graph_db.get_definition_by_id(
+                                query_text,
+                                config["configurable"]["thread_id"]
+                            )
+                        else:
+                            logger.info(f"Using SEMANTIC SEARCH for {query_text}")
+
+                            matches = graph_db.semantic_search(
+                                query_text,
+                                project_id=config["configurable"]["thread_id"],
+                                sheet_number=plan_sheet,   
+                                limit=1
+                            )
+
+                            if matches:
                                 definition = matches[0]
 
                         sym["linked_definition"] = definition
