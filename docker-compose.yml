@@ -20,6 +20,7 @@ services:
     volumes:
       - /data/assets:/app/assets
       - /var/log/dax:/var/log/dax
+      - /data/bom:/app/bom
 
   memgraph:
     image: memgraph/memgraph:latest
