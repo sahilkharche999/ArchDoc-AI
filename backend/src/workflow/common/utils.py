@@ -151,7 +151,7 @@ def extract_single_detail(group: DetailGroup, images_dir: str, temp_plan_like_de
 
     # B. Add Specific Images
     for img_path in detail_images:
-        b64 = load_image_base64(Image.open(img_path))
+        b64 = load_image_base64(img_path)
         payload.append({
             "type": "image_url",
             "image_url": {"url": f"data:image/png;base64,{b64}"}
