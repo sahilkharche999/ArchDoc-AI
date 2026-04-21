@@ -14,6 +14,8 @@ from src.db.update_jobs_status import update_job_progress
 from src.db.get_projects import get_job_progress
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from langgraph.types import Command
+from langchain_core.load import dumps
 load_dotenv()
 
 class StartJobRequest(BaseModel):
@@ -116,23 +118,57 @@ def start_job(request: StartJobRequest):
         update_job_progress(job_id, "processing",None)
         redis_conn.redis_client.publish(
             job_id,
-            json.dumps({
+            dumps({
                 "step":None,
                 "status": "processing"
             })
         )
         try:
-            for thread_id, event in stream_estimation(job_id, file_path,output_dir ):
-                for node_name, state_update in event.items():
-                    
-                    update_job_progress(job_id, "processing", node_name)
+            for thread_id, event in stream_estimation(job_id, file_path, output_dir):
+                logger.info(f"STREAM EVENT 👉 {event}")
+
+                if not isinstance(event, dict):
+                    continue
+
+                if "__interrupt__" in event:
+                    logger.info("🚨 INTERRUPT DETECTED")
+                    logger.info(f"RAW INTERRUPT 👉 {event['__interrupt__']}")
+                    interrupt_obj = event["__interrupt__"]
+
+                    if isinstance(interrupt_obj, tuple):
+                        interrupt_obj = interrupt_obj[0]
+
+                    review_data = interrupt_obj
+                    while hasattr(review_data, "value"):
+                        review_data = review_data.value
+                    logger.info(f"✅ CLEAN REVIEW DATA 👉 {review_data}")
+                    logger.info("📤 SENDING HITL TO FRONTEND")
+
+                    redis_conn.redis_client.set(
+                        f"hitl:{job_id}",
+                        dumps(review_data)
+                    )
+
                     redis_conn.redis_client.publish(
-                    job_id,
-                    json.dumps({
-                        "step": node_name,
-                        "status": "processing"
-                    })
-                )
+                        job_id,
+                        dumps({
+                            "step": "hitl_review",
+                            "status": "waiting_for_user",
+                            "data": review_data
+                        })
+                    )
+
+                    return
+
+            
+                for node_name, _ in event.items():
+                    redis_conn.redis_client.publish(
+                        job_id,
+                        dumps({
+                            "step": node_name,
+                            "status": "processing"
+                        })
+                    )
 
             update_job_progress(job_id, "completed", "agent_4_merger")
             redis_conn.redis_client.publish(
@@ -151,6 +187,78 @@ def start_job(request: StartJobRequest):
 
     return {"message": "started"}
 
+@router.get("/jobs/{job_id}/hitl")
+def get_hitl(job_id: str):
+    data = redis_conn.redis_client.get(f"hitl:{job_id}")
+    
+    if not data:
+        raise HTTPException(404, "No HITL pending")
+
+    return json.loads(data)
+
+
+@router.post("/jobs/{job_id}/hitl")
+def submit_hitl(job_id: str, payload: dict):
+
+    resume_payload = {
+        "corrected_bboxes": payload["corrected_bboxes"]
+    }
+    logger.info(f"🔄 RESUME STARTED | job_id={job_id}")
+    logger.info(f"📥 RESUME PAYLOAD 👉 {resume_payload}")
+    def resume():
+
+        redis_conn.redis_client.delete(f"hitl:{job_id}")
+
+        for thread_id, event in stream_estimation(
+            job_id,
+            None,
+            None,
+            command=Command(resume=resume_payload)
+        ):
+            logger.info(f"🔁 RESUME EVENT 👉 {event}")
+
+            if not isinstance(event, dict):
+                continue
+
+            if "__interrupt__" in event:
+                logger.info("🚨 INTERRUPT AGAIN AFTER RESUME")
+                interrupt_obj = event["__interrupt__"]
+
+                if isinstance(interrupt_obj, tuple):
+                    interrupt_obj = interrupt_obj[0]
+
+                review_data = interrupt_obj
+                while hasattr(review_data, "value"):
+                    review_data = review_data.value
+
+                redis_conn.redis_client.set(
+                    f"hitl:{job_id}",
+                    dumps(review_data)
+                )
+
+                redis_conn.redis_client.publish(
+                    job_id,
+                    dumps({
+                        "step": "hitl_review",
+                        "status": "waiting_for_user",
+                        "data": review_data
+                    })
+                )
+                return
+
+            for node_name, _ in event.items():
+                logger.info(f"➡️ NEXT NODE AFTER RESUME 👉 {node_name}")
+                redis_conn.redis_client.publish(
+                    job_id,
+                    dumps({
+                        "step": node_name,
+                        "status": "processing"
+                    })
+                )
+
+    threading.Thread(target=resume).start()
+
+    return {"message": "resumed"}
 
 @router.get("/jobs/{job_id}/stream")
 def stream_job(job_id: str):

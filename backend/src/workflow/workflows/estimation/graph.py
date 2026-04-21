@@ -6,6 +6,12 @@ from src.workflow.workflows.estimation.nodes import node_process_details
 from src.workflow.workflows.estimation.nodes import node_process_plans
 from src.workflow.workflows.estimation.nodes import node_agent_4_merger
 
+def route_after_hitl(state):
+    remaining = state.get("remaining_pages", [])
+    if len(remaining) > 0:
+        return "process_plans"
+    return "process_details"
+    
 workflow = StateGraph(ProjectState)
 workflow.add_node("classify", node_classify_pages)
 workflow.add_node("process_text", node_process_text_rules)
@@ -15,6 +21,11 @@ workflow.add_node("agent_4_merger", node_agent_4_merger)
 
 workflow.add_edge(START, "classify")
 workflow.add_edge("classify", "process_text")
+
+workflow.add_conditional_edges(
+    "process_plans",
+    route_after_hitl
+)
 workflow.add_edge("process_text", "process_plans")
 workflow.add_edge("process_plans", "process_details")
 workflow.add_edge("process_details", "agent_4_merger")

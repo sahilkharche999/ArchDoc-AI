@@ -10,3 +10,4 @@ class ProjectState(TypedDict):
     final_bill_of_materials: Dict
     floor_plan_images: List[str]
     detected_details: List[Dict[str, Any]]
+    __hitl_done__: bool = False

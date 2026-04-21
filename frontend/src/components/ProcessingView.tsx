@@ -1,4 +1,4 @@
-import {useEffect, useMemo, useState} from "react";
+import {useEffect, useMemo, useState,useRef} from "react";
 import {Check, Loader2} from "lucide-react";
 import {Card, CardContent} from "./ui/card";
 import {Document, Page, pdfjs} from "react-pdf";
@@ -15,7 +15,7 @@ interface ProcessingViewProps {
 
 const steps = [
     {label: "Pages Classified"},              // classify
-    {label: "Text Rules Processed"},          // process_text
+    // {label: "Text Rules Processed"},          // process_text
     {label: "Floor Plans Identified"},        // process_plans
     {label: "Details Extracted"},             // process_details
     {label: "Bill of Materials Generated"}    // agent_4_merger
@@ -27,7 +27,14 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
     const [numPages, setNumPages] = useState<number>();
     const [pageNumber, setPageNumber] = useState(1);
     const [isPdfReady, setIsPdfReady] = useState(false);
+    const [hitlData, setHitlData] = useState<any>(null);
+    const [showHITL, setShowHITL] = useState(false);
     
+    const canvasRef = useRef<HTMLCanvasElement>(null);
+    const imgRef = useRef<HTMLImageElement>(null);
+    const drawingRef = useRef<{active:boolean, startX:number, startY:number}>({active:false,startX:0,startY:0});
+    const [bboxes, setBboxes] = useState<{x:number,y:number,width:number,height:number}[]>([]);
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
     
     function onDocumentLoadSuccess({numPages}: { numPages: number }) {
@@ -41,6 +48,15 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
     
     const pdfFileObject = useMemo(() => ({url: `${import.meta.env.VITE_API_URL}/api/v1/${normalizePath(filePath)}`}), [filePath]);
     
+  useEffect(() => {
+    if (hitlData) {
+        console.log("✅ HITL DATA UPDATED 👉", hitlData);
+    }
+}, [hitlData]);
+
+  useEffect(() => {
+    redrawCanvas();
+  }, [bboxes]);
 
   useEffect(() => {
   if (!filePath) return;
@@ -74,23 +90,46 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
 
         const nodeMap: Record<string, number> = {
             classify: 0,
-            process_text: 1,
-            process_plans: 2,
-            process_details: 3,
-            agent_4_merger: 4
+            // process_text: 1,
+            process_plans: 1,
+            process_details: 2,
+            agent_4_merger: 3
         };
 
         eventSource.onmessage = async (event) => {
-            const data = JSON.parse(event.data);
+            console.log("📩 RAW SSE EVENT 👉", event.data);
+            let data;
+            try {
+                data = JSON.parse(event.data);
+            } catch (e) {
+                console.error("❌ JSON parse failed", event.data);
+                return;
+            }
+            console.log("✅ PARSED SSE 👉", data);
+            if (data.step === "hitl_review") {
+                console.log("🔥 HITL EVENT FULL 👉", data);
+
+                if (!data.data || !data.data.image_path) {
+                    console.error("❌ INVALID HITL DATA", data);
+                    return;
+                }
+
+                setHitlData(data.data);
+                setShowHITL(true);
+                return;
+            }
+            if (!data.step) return;
+            const step = data.step?.toLowerCase().trim();
+            const status = data.status?.toLowerCase();
+
+            console.log("➡️ STEP UPDATE", step, status);
+
+            
 
             if (!data.step) {
                 setCompletedSteps([]); 
                 return;
             }
-
-            const step = data.step?.toLowerCase().trim();
-            const status = data.status?.toLowerCase();
-
             const stepIndex = nodeMap[step];
             console.log(`Here is the current step: ${stepIndex}`)
             if (stepIndex !== undefined) {
@@ -127,8 +166,216 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
         };
     }, [jobId]);
 
+    const imageNaturalW = hitlData?.image_width  ?? 0;
+    const imageNaturalH = hitlData?.image_height ?? 0;
+
+    function toImageCoords(displayX: number, displayY: number) {
+            const canvas = canvasRef.current!;
+            const rect   = canvas.getBoundingClientRect();
+            const scaleX = imageNaturalW / rect.width;
+            const scaleY = imageNaturalH / rect.height;
+            return { x: displayX * scaleX, y: displayY * scaleY };
+        }
+
+    function getRelativePos(e: React.MouseEvent<HTMLCanvasElement>) {
+        const rect = canvasRef.current!.getBoundingClientRect();
+        return { x: e.clientX - rect.left, y: e.clientY - rect.top }; // display px
+    }
+    function redrawCanvas(extraRect?: {x:number,y:number,width:number,height:number} | null) {
+        const canvas = canvasRef.current;
+        const img    = imgRef.current;
+        if (!canvas || !img) return;
+        const ctx = canvas.getContext("2d")!;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+        // green = auto-detected bboxes from backend (already in image-pixel space)
+        if (hitlData?.bboxes?.length) {
+            ctx.strokeStyle = "#22c55e";
+            ctx.lineWidth   = 3;
+            ctx.fillStyle   = "rgba(34,197,94,0.1)";
+            for (const b of hitlData.bboxes) {
+                ctx.strokeRect(b.x1, b.y1, b.x2 - b.x1, b.y2 - b.y1);
+                ctx.fillRect  (b.x1, b.y1, b.x2 - b.x1, b.y2 - b.y1);
+            }
+        }
+
+        // red = user-drawn boxes (stored in image-pixel space)
+        ctx.strokeStyle = "#ef4444";
+        ctx.lineWidth   = 2;
+        ctx.fillStyle   = "rgba(239,68,68,0.1)";
+        for (const box of bboxes) {
+            ctx.strokeRect(box.x, box.y, box.width, box.height);
+            ctx.fillRect  (box.x, box.y, box.width, box.height);
+        }
+        if (extraRect) {
+            ctx.strokeRect(extraRect.x, extraRect.y, extraRect.width, extraRect.height);
+            ctx.fillRect  (extraRect.x, extraRect.y, extraRect.width, extraRect.height);
+        }
+    }
+
+    function handleMouseDown(e: React.MouseEvent<HTMLCanvasElement>) {
+        const pos = getRelativePos(e);
+        drawingRef.current = { active: true, startX: pos.x, startY: pos.y };
+    }
+
+    function handleMouseMove(e: React.MouseEvent<HTMLCanvasElement>) {
+        if (!drawingRef.current.active) return;
+        const pos = getRelativePos(e);
+        const { startX, startY } = drawingRef.current;
+        const a = toImageCoords(startX, startY);
+        const b = toImageCoords(pos.x,  pos.y);
+        redrawCanvas({
+            x:      Math.min(a.x, b.x),
+            y:      Math.min(a.y, b.y),
+            width:  Math.abs(b.x - a.x),
+            height: Math.abs(b.y - a.y),
+        });
+    }
+
+    function handleMouseUp(e: React.MouseEvent<HTMLCanvasElement>) {
+        if (!drawingRef.current.active) return;
+        const pos = getRelativePos(e);
+        const { startX, startY } = drawingRef.current;
+        drawingRef.current = { active: false, startX: 0, startY: 0 };
+        const a = toImageCoords(startX, startY);
+        const b = toImageCoords(pos.x,  pos.y);
+        const rect = {
+            x:      Math.min(a.x, b.x),
+            y:      Math.min(a.y, b.y),
+            width:  Math.abs(b.x - a.x),
+            height: Math.abs(b.y - a.y),
+        };
+        if (rect.width > 5 && rect.height > 5) {
+            setBboxes(prev => [...prev, rect]);
+        }
+    }
+
+    function handleImageLoad() {
+        const canvas = canvasRef.current;
+        const img    = imgRef.current;
+        if (!canvas || !img) return;
+        // use the dimensions from the backend payload — not img.naturalWidth
+        // because the annotated PNG served by FastAPI IS the same size
+        canvas.width  = imageNaturalW || img.naturalWidth;
+        canvas.height = imageNaturalH || img.naturalHeight;
+        redrawCanvas();
+    }
+
+    // convert image-pixel bboxes → {x1,y1,x2,y2} integers — exact format nodes.py expects
+    function toBackendBboxes() {
+        return bboxes.map(b => ({
+            x1: Math.round(b.x),
+            y1: Math.round(b.y),
+            x2: Math.round(b.x + b.width),
+            y2: Math.round(b.y + b.height),
+        }));
+    }
+
+    async function handleApprove() {
+        setIsSubmitting(true);
+        try {
+            // merge original auto-detected + user-drawn
+            const original = (hitlData?.bboxes ?? []) as {x1:number,y1:number,x2:number,y2:number}[];
+            const merged   = [...original, ...toBackendBboxes()];
+            await fetch(`${import.meta.env.VITE_API_URL}/api/v1/jobs/${jobId}/hitl`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ corrected_bboxes: toBackendBboxes() }),
+            });
+            setShowHITL(false);
+            setHitlData(null);
+            setBboxes([]);
+        } finally {
+            setIsSubmitting(false);
+        }
+    }
+ 
     return (
+        
         <div className="grid grid-cols-2 gap-6 h-full p-6">
+          {showHITL && hitlData && (
+            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+                <div className="bg-white p-4 rounded shadow-lg max-w-3xl w-full mx-4">
+                    <h3 className="text-base font-medium mb-1">Mark missing components</h3>
+                    <p className="text-sm text-gray-500 mb-3">
+                        Click and drag to draw boxes. Submit when done or skip to continue.
+                    </p>
+
+                    <div className="relative overflow-auto max-h-[60vh] border rounded">
+                        {/* hidden img — source for canvas drawImage */}
+                        <img
+                            ref={imgRef}
+                            src={`${import.meta.env.VITE_API_URL}${hitlData.image_path}`}
+                            alt="HITL source"
+                            className="hidden"
+                            onLoad={handleImageLoad}
+                            crossOrigin="anonymous"
+                        />
+                        <canvas
+                            ref={canvasRef}
+                            className="block max-w-full"
+                            style={{ cursor: "crosshair" }}
+                            onMouseDown={handleMouseDown}
+                            onMouseMove={handleMouseMove}
+                            onMouseUp={handleMouseUp}
+                        />
+                    </div>
+
+                    <div className="flex items-center justify-between mt-4">
+                        <span className="text-sm text-gray-500">
+                            {bboxes.length} box{bboxes.length !== 1 ? "es" : ""} drawn
+                            {bboxes.length > 0 && (
+                                <>
+                                <button
+                                        className="ml-3 text-blue-500 underline text-sm"
+                                        onClick={() => setBboxes(prev => prev.slice(0, -1))}
+                                    >
+                                        Undo
+                                    </button>
+                             
+                                <button
+                                    className="ml-3 text-red-500 underline text-sm"
+                                    onClick={() => { setBboxes([]); redrawCanvas(); }}
+                                >
+                                   
+                                    Clear all
+                                </button>
+                                    </>
+                            )}
+                        </span>
+                        <div className="flex gap-3">
+                            <button
+                                disabled={isSubmitting}
+                                onClick={async () => {
+                                    setIsSubmitting(true);
+                                    await fetch(`${import.meta.env.VITE_API_URL}/api/v1/jobs/${jobId}/hitl`, {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({ corrected_bboxes: [] })
+                                    });
+                                    setIsSubmitting(false);
+                                    setShowHITL(false);
+                                    setHitlData(null);
+                                    setBboxes([]);
+                                }}
+                                className="px-4 py-2 text-sm border rounded hover:bg-gray-50 disabled:opacity-50"
+                            >
+                                Skip
+                            </button>
+                            <button
+                                onClick={handleApprove}
+                                disabled={isSubmitting}
+                                className="px-4 py-2 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2"
+                            >
+                                {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
+                                Submit
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        )}
             {loadingResult && (
                 <div className="absolute inset-0 bg-background/80 flex items-center justify-center z-50">
                     <div className="text-center">

@@ -1,8 +1,11 @@
 import os
+import cv2
 import json
+import fitz
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
+from langgraph.types import interrupt
 from src.workflow.common.schemas import DetailExtraction
 import pdfplumber
 from pypdf import PdfReader, PdfWriter
@@ -30,7 +33,7 @@ from src.workflow.common.utils import (
     convert_specific_page_to_png,
     load_material_weights,              
     minerU_pdf_creating_extration,       
-    is_detail_ref     
+    is_detail_ref    
     )
 
 from src.infrastructure.graph_db import graph_db
@@ -184,6 +187,15 @@ def node_process_text_rules(state: ProjectState,config):
                 
     return {"general_rules": state["general_rules"]}
 
+    
+    # step 2 : call the fast api and send them this image_path /img and 
+    # step 3 : write the route and listen for this call
+    # step 4 : show the UI or render the image as pop up and ask to make BB aroung the componet which is not cover
+    # step 5 : click submit or review donw 
+    # step 6 : fast api will again get the call and return the new list of BB
+    # step 7 : we iterate over each and crop the image and store in the path where other image are also present 
+
+
 # ---  AGENT 2: PROCESS PLAN ---
 def node_process_plans(state: ProjectState,config):
     """
@@ -215,9 +227,39 @@ def node_process_plans(state: ProjectState,config):
     floor_plan_images = [] 
     detected_details = []
     
-    floor_pages = [p for p, t in state["page_map"].items() if t == "floor"]
+    if "remaining_pages" not in state:
+        state["remaining_pages"] = [
+            p for p, t in state["page_map"].items() if t == "floor"
+        ]
+
+    if not state["remaining_pages"]:
+        return state
     
-    for page_num in floor_pages:
+    assets_dir = os.getenv("ASSETS_DIR", "/data/assets")
+    job_id = config["configurable"]["thread_id"]
+    job_dir = os.path.join(assets_dir, job_id)
+    os.makedirs(job_dir, exist_ok=True)
+
+
+    if state.get("__hitl_done__"):
+        corrected_bboxes = state["corrected_bboxes"]
+        current_page    = state["current_page"]
+        page_num        = current_page["page_num"]
+        json_path       = current_page["json_path"]
+        page_img_path   = current_page["image_path"]
+
+        logger.info(f"▶️ RESUMED | page={page_num} | corrected_bboxes={len(corrected_bboxes)}")
+
+        mineru_vlm_dir = os.path.dirname(json_path)
+        images_dir     = f"{mineru_vlm_dir}/images"
+
+        img_orig = cv2.imread(page_img_path)
+        img_h, img_w = img_orig.shape[:2]
+    else:   
+
+        page_num = state["remaining_pages"].pop(0)
+        
+        
         logger.debug(f"Ingesting Page {page_num}...")
         
         # 1. Setup Paths
@@ -226,124 +268,232 @@ def node_process_plans(state: ProjectState,config):
         page_pdf_path = f"{page_dir}.pdf"
 
         mineru_output_dir = f"{state['output_dir']}/floor_{page_num}"
-        mineru_vlm_dir = f"{mineru_output_dir}/floor_{page_num}/vlm" # Adjust based on actual MinerU output structure
+        mineru_vlm_dir = f"{mineru_output_dir}/floor_{page_num}/auto" # Adjust based on actual MinerU output structure
         json_path = f"{mineru_vlm_dir}/floor_{page_num}_content_list_v2.json"
         images_dir = f"{mineru_vlm_dir}/images"
 
         # 2. Prepare Page Image & PDF
-        convert_specific_page_to_png(state["pdf_path"], page_num, page_img_path, dpi=300)
+        if not os.path.exists(page_img_path):
+          convert_specific_page_to_png(state["pdf_path"], page_num, page_img_path, dpi=300)
 
         sheet_info = get_sheet_number(page_img_path)
         sheet_number = sheet_info["normalized"]
         logger.debug(f"Sheet Number: {sheet_number} processing")
         
-        
-        try:
-            reader = PdfReader(state["pdf_path"])
-            writer = PdfWriter()
-            writer.add_page(reader.pages[page_num])
-            with open(page_pdf_path, "wb") as f: writer.write(f)
-        except Exception as e:
-            logger.error(f"PDF extraction failed: {e}")
-            continue
+        if not os.path.exists(page_pdf_path):
+            try:
+                reader = PdfReader(state["pdf_path"])
+                writer = PdfWriter()
+                writer.add_page(reader.pages[page_num])
+                with open(page_pdf_path, "wb") as f: writer.write(f)
+            except Exception as e:
+                logger.error(f"PDF extraction failed: {e}")            
 
         # 3. Run MinerU (VLM Backend)
-        logger.debug(f"   > Running MinerU (VLM) on Page {page_num}...")
-        minerU_pdf_creating_extration(page_pdf_path, mineru_output_dir, "vlm-auto-engine")
-
-        # 4. Run Union Cropping (Title + Table Merge)
-        if os.path.exists(json_path):
-            logger.debug(f"   > Running Union Cropping...")
-            # This creates UNION crops in 'images_dir' and deletes old ones
-            crop_union_tables(json_path, page_img_path, output_dir=images_dir)
+        if not os.path.exists(json_path):
+            logger.debug(f"   > Running MinerU on Page {page_num}...")
+            minerU_pdf_creating_extration(page_pdf_path, mineru_output_dir, "pipeline")
         else:
-            logger.error(f"   ! MinerU JSON not found at {json_path}. Skipping Union Crop.")
+            logger.debug(f"   > MinerU output already exists, skipping | path={json_path}")
 
-        # 5. PROCESS CROPS (Ingest Schedules, Identify Plans)
-        if os.path.exists(images_dir):
-            image_files = [f for f in os.listdir(images_dir) if f.endswith(('.jpg', '.png'))]
-            logger.debug(f"   > Found {len(image_files)} crops to analyze.")
 
-            prompt =prompt_for_node_process_plans()
-            for img_file in image_files:
-                crop_path = os.path.join(images_dir, img_file)
+        img_orig = cv2.imread(page_img_path)
+        img_annotated = img_orig.copy()
+        img_h, img_w = img_orig.shape[:2]
+        detected_bboxes = []
+        mineru_scale_x = 1.0
+        mineru_scale_y = 1.0
+
+
+        if os.path.exists(json_path):
+            with open(json_path) as f:
+                mineru_data = json.load(f)
+            # content_list_v2.json is a list-of-pages; each page is a list of elements
+            elements = mineru_data[0] if isinstance(mineru_data, list) else mineru_data
+
+            max_json_x, max_json_y = 0, 0
+            for ele in elements:
+                bbox = ele.get("bbox")
+                if bbox and len(bbox) == 4:
+                    max_json_x = max(max_json_x, bbox[2])
+                    max_json_y = max(max_json_y, bbox[3])
+
+            if max_json_x > 0 and max_json_y > 0:
+                mineru_scale_x = img_w / max_json_x
+                mineru_scale_y = img_h / max_json_y
+                logger.debug(f"   > MinerU→PNG scale: x={mineru_scale_x:.3f}, y={mineru_scale_y:.3f}")
+
+            for ele in elements:
+                if ele.get("content", {}).get("image_source") or ele.get("type") == "image":
+                    bbox = ele.get("bbox")
+                    if bbox and len(bbox) == 4:
+                        x1 = int(bbox[0] * mineru_scale_x)
+                        y1 = int(bbox[1] * mineru_scale_y)
+                        x2 = int(bbox[2] * mineru_scale_x)
+                        y2 = int(bbox[3] * mineru_scale_y)
+                        cv2.rectangle(img_annotated, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                        detected_bboxes.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2})
+            logger.debug(f"   > Annotated {len(detected_bboxes)} bboxes from MinerU JSON")
+        else:
+            logger.warning(f"   ! MinerU JSON not found for annotation | path={json_path}")
+    
+
+
+        annotated_filename = f"page_{page_num}_annotated.png"
+        cv2.imwrite(os.path.join(job_dir, annotated_filename), img_annotated)
+        cv2.imwrite(os.path.join(job_dir, f"page_{page_num}.png"), img_orig)
+
+
+        image_url = f"/api/v1/assets/{job_id}/{annotated_filename}"
+
+        state["current_page"] = {
+            "page_num": page_num,
+            "image_path": page_img_path,   # original full-res path used for cropping
+            "json_path": json_path
+        }
+        state["__hitl_done__"] = True 
+
+        review_data = {
+            "image_path": image_url,
+            "page_num": page_num,
+            "bboxes": detected_bboxes,
+            "image_width": img_w,
+            "image_height": img_h,
+        }
+
+        resume_value = interrupt(review_data)
+        corrected_bboxes = resume_value.get("corrected_bboxes", detected_bboxes) if resume_value else detected_bboxes
+        state["corrected_bboxes"] = corrected_bboxes
+
+        corrected_bboxes = state.get("corrected_bboxes", detected_bboxes)
+        logger.info(f"▶️ RESUMED | corrected_bboxes count={len(corrected_bboxes)}")
+
+    if corrected_bboxes:
+        os.makedirs(images_dir, exist_ok=True)
+        for i, bbox in enumerate(corrected_bboxes):
+            x1 = int(bbox["x1"])
+            y1 = int(bbox["y1"])
+            x2 = int(bbox["x2"])
+            y2 = int(bbox["y2"])
+            # Guard against out-of-bounds
+            x1, y1 = max(0, x1), max(0, y1)
+            x2, y2 = min(img_w, x2), min(img_h, y2)
+            if x2 <= x1 or y2 <= y1:
+                logger.warning(f"   ! Skipping invalid bbox {bbox}")
+                continue
+            crop = img_orig[y1:y2, x1:x2]
+            crop_filename = f"hitl_crop_{page_num}_{i}.png"
+            crop_path = os.path.join(images_dir, crop_filename)
+            cv2.imwrite(crop_path, crop)
+            logger.debug(f"   > Saved crop: {crop_filename} | bbox=({x1},{y1},{x2},{y2})")
+        logger.info(f"   > Saved {len(corrected_bboxes)} user-corrected crops to {images_dir}")
+
+        for fname in os.listdir(images_dir):
+                if not fname.startswith("hitl_crop_"):
+                    old_path = os.path.join(images_dir, fname)
+                    try:
+                        os.remove(old_path)
+                        logger.debug(f"   > Deleted old minerU image: {fname}")
+                    except Exception as e:
+                        logger.warning(f"   ! Could not delete {fname}: {e}")
+        logger.info(f"   > Cleaned up old minerU images, only hitl_crop_* remain in {images_dir}")
+
+
+    # 4. Run Union Cropping (Title + Table Merge)
+    if os.path.exists(json_path):
+        logger.debug(f"   > Running Union Cropping...")
+        # This creates UNION crops in 'images_dir' and deletes old ones
+        crop_union_tables(json_path, page_img_path, output_dir=images_dir)
+    else:
+        logger.error(f"   ! MinerU JSON not found at {json_path}. Skipping Union Crop.")
+
+    # 5. PROCESS CROPS (Ingest Schedules, Identify Plans)
+    if os.path.exists(images_dir):
+        image_files = [f for f in os.listdir(images_dir) if f.endswith(('.jpg', '.png'))]
+        logger.debug(f"   > Found {len(image_files)} crops to analyze.")
+
+        prompt =prompt_for_node_process_plans()
+        for img_file in image_files:
+            crop_path = os.path.join(images_dir, img_file)
+            
+            # Prompt: Classify & Extract
+            
+            msg = HumanMessage(content=[
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{load_image_base64(crop_path)}"}}
+            ])
+            
+            try:
+                result = llm_flash.with_structured_output(IngestionOutput).invoke([msg])
                 
-                # Prompt: Classify & Extract
+                # CASE A: It is a Schedule/Note -> Store in Graph
+                if result.type == "Schedule":
+                    logger.debug(f"     > Ingested Schedule: {result.title}")
+                    rows = result.rows or []
+                    logger.debug(f" > Found {len(rows)} rows.")
+
+                    columns = result.columns or []
+
+                    for row in rows:
+                        # row is already a dictionary
+                        row_data = row
+
+                        # Determine primary key (usually first column)
+                        primary_key = None
+                        if columns:
+                            primary_key = row_data.get(columns[0])
+
+                        if not primary_key:
+                            primary_key = row_data.get("MARK") or row_data.get("KEY") or "UNKNOWN"
+
+                        if primary_key == "UNKNOWN":
+                            logger.warning(f"     ! Could not determine primary key for row: {row_data}")
+
+                        graph_db.add_schedule_rule(
+                            project_id=config["configurable"]["thread_id"],
+                            schedule_name=result.title,
+                            symbol=primary_key,
+                            row_data=row_data,
+                            columns=columns,
+                            page_num=page_num,
+                            sheet_number=sheet_number
+                        )
+
+                # CASE B: It is a Plan View -> Save for Agent 5
+                elif result.type == "Plan_View":
+                    logger.debug(f"     > Found Floor Plan Crop: {img_file}")
+                    floor_plan_images.append({
+                        "path": crop_path,
+                        "sheet": sheet_number
+                    })
+                elif result.type.strip() == "Detail":
+                    logger.debug(f"     > Found Detail Crop: {img_file}")
+
+                    # 1. Safe detail_id extraction
+                    detail_id = result.title.strip() if result.title else f"detail_{os.path.splitext(img_file)[0]}"
+
+                    # 2. Construct key
+                    key = f"{detail_id}/{sheet_number}" if "/" not in detail_id else detail_id
+                    logger.debug(f"     > Found Detail Crop: {img_file} , Detail_id:{detail_id}, key :{key}")
+
+                    # 3. Store ONLY detection (not full extraction)
+                    detected_details.append({
+                        "detail_id": detail_id,
+                        "detail_key": key,
+                        "crop_path": crop_path,
+                        "sheet": sheet_number,
+                        "page": page_num
+                    })
                 
-                msg = HumanMessage(content=[
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{load_image_base64(crop_path)}"}}
-                ])
-                
-                try:
-                    result = llm_flash.with_structured_output(IngestionOutput).invoke([msg])
-                    
-                    # CASE A: It is a Schedule/Note -> Store in Graph
-                    if result.type == "Schedule":
-                        logger.debug(f"     > Ingested Schedule: {result.title}")
-                        rows = result.rows or []
-                        logger.debug(f" > Found {len(rows)} rows.")
 
-                        columns = result.columns or []
-
-                        for row in rows:
-                            # row is already a dictionary
-                            row_data = row
-
-                            # Determine primary key (usually first column)
-                            primary_key = None
-                            if columns:
-                                primary_key = row_data.get(columns[0])
-
-                            if not primary_key:
-                                primary_key = row_data.get("MARK") or row_data.get("KEY") or "UNKNOWN"
-
-                            if primary_key == "UNKNOWN":
-                                logger.warning(f"     ! Could not determine primary key for row: {row_data}")
-
-                            graph_db.add_schedule_rule(
-                                project_id=config["configurable"]["thread_id"],
-                                schedule_name=result.title,
-                                symbol=primary_key,
-                                row_data=row_data,
-                                columns=columns,
-                                page_num=page_num,
-                                sheet_number=sheet_number
-                            )
-
-                    # CASE B: It is a Plan View -> Save for Agent 5
-                    elif result.type == "Plan_View":
-                        logger.debug(f"     > Found Floor Plan Crop: {img_file}")
-                        floor_plan_images.append({
-                            "path": crop_path,
-                            "sheet": sheet_number
-                        })
-                    elif result.type.strip() == "Detail":
-                        logger.debug(f"     > Found Detail Crop: {img_file}")
-
-                        # 1. Safe detail_id extraction
-                        detail_id = result.title.strip() if result.title else f"detail_{os.path.splitext(img_file)[0]}"
-
-                        # 2. Construct key
-                        key = f"{detail_id}/{sheet_number}" if "/" not in detail_id else detail_id
-
-                        # 3. Store ONLY detection (not full extraction)
-                        detected_details.append({
-                            "detail_id": detail_id,
-                            "detail_key": key,
-                            "crop_path": crop_path,
-                            "sheet": sheet_number,
-                            "page": page_num
-                        })
-                  
-
-                except Exception as e:
-                    logger.exception(f"     ! Failed to ingest {img_file}: {e}")
+            except Exception as e:
+                logger.exception(f"     ! Failed to ingest {img_file}: {e}")
                     
     return {
         "floor_plan_images": floor_plan_images, 
          "detected_details": detected_details,
-        "general_rules": "Updated Graph with Schedules"
+        "general_rules": "Updated Graph with Schedules",
+        "__hitl_done__": False,
     }
 
 # ---  AGENT 3: DETAIL PROCESSOR ---
@@ -408,7 +558,7 @@ def node_process_details(state: ProjectState,config):
 
         # 4. Run MinerU 
         logger.debug(f"   > Running MinerU on Page {page_num}...")
-        minerU_pdf_creating_extration(page_pdf_path, state["output_dir"],"pipeline")
+        minerU_pdf_creating_extration(page_pdf_path, state["output_dir"],"vlm-auto-engine")
 
         # 5. Prepare MinerU Data. 
         mineru_base_dir = f"{state['output_dir']}/section_page_{page_num}/auto"
@@ -463,8 +613,8 @@ def node_process_details(state: ProjectState,config):
                         page_num=page_num,
                         sheet_number=sheet_number
                     )
-        
-    for plan in temp_dependent_detail_images:
+    if  len(temp_dependent_detail_images)>0:               
+        for plan in temp_dependent_detail_images:
                     img_path = plan["image_path"]
                     plan_sheet = plan["sheet"]
                     
@@ -603,8 +753,8 @@ def node_process_details(state: ProjectState,config):
 
 
 
-   
-    for plan in temp_plan_like_details:
+    if len(temp_plan_like_details)>0:
+        for plan in temp_plan_like_details:
                     img_path = plan["image_path"]
                     plan_sheet = plan["sheet"]
 
