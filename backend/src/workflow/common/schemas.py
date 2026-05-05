@@ -48,6 +48,10 @@ class MaterialItem(BaseModel):
     )
     qty_rule: str = Field(description="Logic: 'FIXED: [Count]' or 'VARIABLE: [Dependency]'")
     notes: Optional[str] = Field(description="Context notes e.g. 'Side Rails'")
+    inherited_from: Optional[str] = Field(
+        default=None,
+        description="If this material came from a sub-detail, the detail ID e.g. '3/S3-01'"
+    )
 
 
 class FabricationMetrics(BaseModel):
@@ -105,28 +109,66 @@ class PlanExtraction(BaseModel):
 
 
 # Schema for Agent 4 (Final Merger)
+# class BillOfMaterialItem(BaseModel):
+#     description: str = Field(description="Human readable description e.g. 'Beam at Grid A'")
+#     material_size: str = Field(description="MUST match a value from the Valid Material List e.g. 'W24X62'")
+#     # The Core Metrics
+#     total_linear_feet: float = Field(description="Total length in feet")
+#     quantity: int = Field(description="Count of pieces")
+
+#     # Fabrication Metrics
+#     total_bolts: int = Field(default=0)
+#     total_holes: int = Field(default=0)
+#     total_weld_inches: float = Field(default=0.0)
+#     lb_per_ft: float | None = None
+#     total_weight_lbs: float | None = None
+#     charge_per_lb: float | None = None
+#     # The "Why" (CoT)
+#     logic_trace: str = Field(
+#         description="Explanation of the calculation. E.g. 'Found 5 cols. Height 18ft from Roof Note. 5*18=90ft.'")
+#     source_drawing: str
+
+
+# class FinalEstimation(BaseModel):
+#     project_summary: str = Field(description="High-level summary of what was estimated")
+#     final_bill_of_materials: List[BillOfMaterialItem]
+
 class BillOfMaterialItem(BaseModel):
     description: str = Field(description="Human readable description e.g. 'Beam at Grid A'")
     material_size: str = Field(description="MUST match a value from the Valid Material List e.g. 'W24X62'")
+ 
     # The Core Metrics
     total_linear_feet: float = Field(description="Total length in feet")
     quantity: int = Field(description="Count of pieces")
-
-    # Fabrication Metrics
-    total_bolts: int = Field(default=0)
-    total_holes: int = Field(default=0)
-    total_weld_inches: float = Field(default=0.0)
+ 
+    # Fabrication Metrics — all 3 required for Dax's 6-point takeoff
+    total_bolts: int = Field(default=0, description="Total bolt count scaled by symbol occurrences on plan")
+    total_holes: int = Field(default=0, description="Total hole count scaled by symbol occurrences on plan")
+    total_weld_inches: float = Field(default=0.0, description="Total weld inches scaled by symbol occurrences on plan")
+ 
+    # Pricing (populated post-LLM by enrich_bom_with_pricing)
     lb_per_ft: float | None = None
     total_weight_lbs: float | None = None
     charge_per_lb: float | None = None
+ 
     # The "Why" (CoT)
     logic_trace: str = Field(
         description="Explanation of the calculation. E.g. 'Found 5 cols. Height 18ft from Roof Note. 5*18=90ft.'")
-    source_drawing: str
-
-
+ 
+    # Traceability — SPLIT into two fields for Dax review workflow
+    source_drawing: str = Field(
+        description="Combined reference kept for backward compatibility e.g. '2/S3-01'")
+    source_sheet: str = Field(
+        default="",
+        description="The sheet number where this material was found e.g. 'S3-01'")
+    source_symbol: str = Field(
+        default="",
+        description="The plan symbol or detail reference that triggered this material e.g. '2/S3-01' or 'hex-1'")
+ 
+ 
 class FinalEstimation(BaseModel):
-    project_summary: str = Field(description="High-level summary of what was estimated")
+    project_summary: str = Field(
+        description="2-3 sentence summary: what structure was estimated, how many sheets, key material categories found.")
     final_bill_of_materials: List[BillOfMaterialItem]
 
 

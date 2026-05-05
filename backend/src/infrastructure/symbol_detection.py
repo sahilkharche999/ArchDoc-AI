@@ -34,16 +34,33 @@ def _load_model():
         _model = AutoModelForZeroShotObjectDetection.from_pretrained(DINO_MODEL_ID).to(DEVICE)
         logger.debug("Grounding DINO model loaded.")
 
+def _boxes_overlap(box1: List[int], box2: List[int], threshold: float = 0.5) -> bool:
+    """Check if two bboxes overlap significantly (IoU > threshold)."""
+    x1 = max(box1[0], box2[0])
+    y1 = max(box1[1], box2[1])
+    x2 = min(box1[2], box2[2])
+    y2 = min(box1[3], box2[3])
+
+    intersection = max(0, x2 - x1) * max(0, y2 - y1)
+    if intersection == 0:
+        return False
+
+    area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+    area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+    union = area1 + area2 - intersection
+
+    return (intersection / union) > threshold
 
 def clean_output(text: str) -> str:
     text = text.strip()
-
+    text = re.sub(r'(?<=/)[5s](?=\d)', 'S', text, flags=re.IGNORECASE)
     # Valid patterns
-    if re.match(r"^hex-\d+$", text):
+    
+    if re.match(r"^hex-\d+$", text, re.IGNORECASE):
         return text
-
-    if re.match(r"^\d+/S-\d+(\.\d+)?$", text):
-        return text
+    
+    if re.match(r"^[^/\s]+/[^/\s]+$", text):
+        return text.upper() 
 
     return "Unknown"
 
@@ -72,13 +89,14 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
         raise
 
     # 1. DINO Detection
-    text_prompt = """
-    hexagon. circle. triangle.
-    detail reference bubble.
-    section reference bubble.
-    drawing callout bubble.
-
-    """
+    # text_prompt = """
+    # hexagon. triangle.
+    # hexagon. circular callout. detail bubble.
+    # detail callout bubble with number and sheet reference.
+    # circle divided horizontally with number on top and sheet code on bottom.
+    # detail reference bubble small.
+    # """
+    text_prompt = "circle. hexagon. triangle."
 
     inputs = _processor(images=image, text=text_prompt, return_tensors="pt").to(DEVICE)
 
@@ -111,6 +129,11 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
 
         # Get Coords
         x1, y1, x2, y2 = map(int, box.tolist())
+        img_area = image.width * image.height
+        bbox_area = (x2 - x1) * (y2 - y1)
+        if bbox_area > 0.5 * img_area:
+            logger.debug(f"Skipping oversized detection | index={i} | bbox_area_ratio={bbox_area/img_area:.2f}")
+            continue
 
         # Add padding for better OCR
         pad = 10
@@ -148,19 +171,35 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
                 raw_text = response.content.strip()
             else:
                 raw_text = response.content[0]["text"].strip()
-            content_text = clean_output(raw_text)
 
-            logger.debug(
-                f"OCR success | index={i} | raw={raw_text} | cleaned={content_text}"
-            )
-
-            symbol_data = SymbolData(
-                shape=str(label),
-                text_content=content_text,
-                bbox=[x1, y1, x2, y2]
-            )
-
-            detected_symbols.append(symbol_data.model_dump())
+            lines = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
+            if len(lines) <= 1:
+                # Single symbol — original behavior
+                content_text = clean_output(raw_text)
+                logger.debug(f"OCR success | index={i} | raw={raw_text} | cleaned={content_text}")
+                detected_symbols.append(SymbolData(
+                    shape=str(label),
+                    text_content=content_text,
+                    bbox=[x1, y1, x2, y2]
+                ).model_dump())
+            else:
+                # Multiple stacked symbols — iterate one by one
+                logger.info(f"OCR returned {len(lines)} stacked symbols | index={i} | lines={lines}")
+                height = y2 - y1
+                slice_h = height / len(lines)
+                for idx, line in enumerate(lines):
+                    cleaned = clean_output(line)
+                    if cleaned == "Unknown":
+                        logger.debug(f"  → skipped line {idx+1}/{len(lines)}: {line!r} (invalid)")
+                        continue
+                    sy1 = int(y1 + idx * slice_h)
+                    sy2 = int(y1 + (idx + 1) * slice_h)
+                    detected_symbols.append(SymbolData(
+                        shape=str(label),
+                        text_content=cleaned,
+                        bbox=[x1, sy1, x2, sy2]
+                    ).model_dump())
+                    logger.debug(f"  → split symbol {idx+1}/{len(lines)}: {cleaned} | bbox=({x1},{sy1},{x2},{sy2})")
 
         except Exception as e:
             logger.error(
@@ -171,5 +210,27 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
     logger.info(
         f"Symbol detection completed | image={os.path.basename(image_path)} | count={len(detected_symbols)}"
     )
+    unique_symbols = []
+    for sym in detected_symbols:
+        if sym["text_content"] == "Unknown":
+            continue
+        is_duplicate = False
+        for kept in unique_symbols:
+            if (sym["text_content"] == kept["text_content"]  and _boxes_overlap(sym["bbox"], kept["bbox"], threshold=0.5)):
+                is_duplicate = True
+                logger.debug(
+                    f"Dedup: skipping {sym['text_content']} at {sym['bbox']} "
+                    f"— overlaps with {kept['text_content']} at {kept['bbox']}"
+                )
+                break
+        if not is_duplicate:
+            unique_symbols.append(sym)
 
-    return detected_symbols
+    logger.info(
+        f"After dedup | unique={len(unique_symbols)} "
+        f"(removed {len(detected_symbols) - len(unique_symbols)} spatial duplicates)"
+    )
+
+    return unique_symbols
+
+

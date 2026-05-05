@@ -5,7 +5,7 @@ from src.workflow.workflows.estimation.graph import workflow
 app = workflow.compile(checkpointer=memory)
 
 
-def stream_estimation(job_id: str, pdf_path: str, output_dir: str,command=None):
+def stream_estimation(job_id: str, pdf_path: str, output_dir: str,command=None, sheet_prefix: str = ""):
     thread_id = job_id
     config = {"configurable": {"thread_id": thread_id}}
     if command:
@@ -18,7 +18,8 @@ def stream_estimation(job_id: str, pdf_path: str, output_dir: str,command=None):
         "detail_library": {},
         "general_rules": "",
         "raw_plan_data": [],
-        "final_bill_of_materials": {}
+        "final_bill_of_materials": {},
+        "sheet_prefix": sheet_prefix 
         }
         iterator = app.stream(initial_state, config=config)
 

@@ -34,6 +34,10 @@ def event_generator(job_id:str):
     pubsub = redis_conn.redis_client.pubsub()
     pubsub.subscribe(job_id)
     try:
+        pending_hitl = redis_conn.redis_client.get(f"hitl:{job_id}")
+        if pending_hitl:
+            review_data = json.loads(pending_hitl)
+            yield f"data: {json.dumps({'step': 'hitl_review', 'status': 'waiting_for_user', 'data': review_data})}\n\n"
         progress = get_job_progress(job_id)
         if progress:
             payload = {
@@ -65,8 +69,6 @@ def event_generator(job_id:str):
     finally:
         pubsub.close()
         logger.debug(f"Event stream closed | job_id={job_id}")
-
-
 
 
 @router.get("/jobs/{job_id}/result")
@@ -124,7 +126,8 @@ def start_job(request: StartJobRequest):
             })
         )
         try:
-            for thread_id, event in stream_estimation(job_id, file_path, output_dir):
+            sheet_prefix = redis_conn.redis_client.get(f"sheet_prefix:{job_id}") or ""
+            for thread_id, event in stream_estimation(job_id, file_path, output_dir,sheet_prefix=sheet_prefix):
                 logger.info(f"STREAM EVENT 👉 {event}")
 
                 if not isinstance(event, dict):
@@ -199,15 +202,38 @@ def get_hitl(job_id: str):
 
 @router.post("/jobs/{job_id}/hitl")
 def submit_hitl(job_id: str, payload: dict):
-
-    resume_payload = {
-        "corrected_bboxes": payload["corrected_bboxes"]
-    }
+    # corrected_bboxes = payload["corrected_bboxes"]
+    # resume_payload = {
+    #     "corrected_bboxes": payload["corrected_bboxes"]
+    # }
+    resume_payload=payload
     logger.info(f"🔄 RESUME STARTED | job_id={job_id}")
     logger.info(f"📥 RESUME PAYLOAD 👉 {resume_payload}")
     def resume():
 
         redis_conn.redis_client.delete(f"hitl:{job_id}")
+        # config = {"configurable": {"thread_id": job_id}}
+        # snapshot = app.get_state(config)
+        # current_page     = snapshot.values.get("current_page")
+        # current_sec_page = snapshot.values.get("current_section_page")
+        # if current_page and current_page.get("status") == "waiting_for_hitl":
+        #     updated_page = {
+        #         **current_page,
+        #         "corrected_bboxes": corrected_bboxes,
+        #         "status": "resumed"
+        #     }
+        #     app.update_state(config, {"current_page": updated_page})
+        #     logger.info(f" Injected corrected_bboxes into current_page | page={current_page['page_num']}")
+
+        # elif current_sec_page and current_sec_page.get("status") == "waiting_for_hitl":
+        #     updated_sec = {
+        #         **current_sec_page,
+        #         "corrected_bboxes": corrected_bboxes,
+        #         "status": "resumed"
+        #     }
+        #     app.update_state(config, {"current_section_page": updated_sec})
+        #     logger.info(f" Injected corrected_bboxes into current_section_page | page={current_sec_page['page_num']}")
+
 
         for thread_id, event in stream_estimation(
             job_id,
@@ -255,6 +281,13 @@ def submit_hitl(job_id: str, payload: dict):
                         "status": "processing"
                     })
                 )
+                
+        update_job_progress(job_id, "completed", "agent_4_merger")
+        redis_conn.redis_client.publish(job_id, json.dumps({
+            "step": "agent_4_merger",
+            "status": "completed"
+        }))
+        logger.info(f"Job completed after resume | job_id={job_id}")
 
     threading.Thread(target=resume).start()
 

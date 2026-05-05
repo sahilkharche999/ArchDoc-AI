@@ -4,9 +4,10 @@ import uuid
 from fastapi import APIRouter, UploadFile, File, Form
 from fastapi import HTTPException
 from pypdf import PdfReader, PdfWriter
-
+from typing import Optional
 from src.db.create_job import create_job,create_job_progress
 from src.logger import setup_logger
+import src.redis_conn as redis_conn
 
 logger = setup_logger(__name__)
 router = APIRouter(prefix="/upload", tags=["upload"])
@@ -16,7 +17,8 @@ router = APIRouter(prefix="/upload", tags=["upload"])
 async def upload_file(
         file: UploadFile = File(...),
         start_page: int = Form(...),
-        end_page: int = Form(...)
+        end_page: int = Form(...),
+        sheet_prefix: Optional[str] = Form(default="")
 ):
     upload_dir = os.getenv("ASSETS_DIR", "/data/assets")
     os.makedirs(upload_dir, exist_ok=True)
@@ -49,9 +51,12 @@ async def upload_file(
     display_name = os.path.splitext(file.filename)[0]
     create_job(job_id, display_name)
     create_job_progress(job_id)
+    if sheet_prefix:
+        redis_conn.redis_client.set(f"sheet_prefix:{job_id}", sheet_prefix.strip().upper())
 
     os.remove(file_path)
     return {
         "job_id": job_id,
-        "file_path": trimmed_path
+        "file_path": trimmed_path,
+        "sheet_prefix": sheet_prefix
     }

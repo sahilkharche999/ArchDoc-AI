@@ -29,75 +29,34 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
     const [isPdfReady, setIsPdfReady] = useState(false);
     const [hitlData, setHitlData] = useState<any>(null);
     const [showHITL, setShowHITL] = useState(false);
-    
+    const [pageMapEdits, setPageMapEdits] = useState<Record<string, string>>({});
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const imgRef = useRef<HTMLImageElement>(null);
     const drawingRef = useRef<{active:boolean, startX:number, startY:number}>({active:false,startX:0,startY:0});
     const [bboxes, setBboxes] = useState<{x:number,y:number,width:number,height:number}[]>([]);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [deletedMineruIndices, setDeletedMineruIndices] = useState<Set<number>>(new Set());
+    const [hitlProgress, setHitlProgress] = useState<{current: number, total: number, remaining: number} | null>(null);
+    const eventSourceRef = useRef<EventSource | null>(null);
 
     
     function onDocumentLoadSuccess({numPages}: { numPages: number }) {
         setNumPages(numPages);
     }
-    function normalizePath(path: string) {
-  return path
-    .replace(/^\/+/, "")      // remove leading /
-    .replace(/^data\//, "");  // remove data/
-}
-    
-    const pdfFileObject = useMemo(() => ({url: `${import.meta.env.VITE_API_URL}/api/v1/${normalizePath(filePath)}`}), [filePath]);
-    
-  useEffect(() => {
-    if (hitlData) {
-        console.log("✅ HITL DATA UPDATED 👉", hitlData);
-    }
-}, [hitlData]);
 
-  useEffect(() => {
-    redrawCanvas();
-  }, [bboxes]);
-
-  useEffect(() => {
-  if (!filePath) return;
-  console.log("filePath 👉", filePath);
-  const checkFile = async () => {
-    try {
-        const cleanPath = normalizePath(filePath)
-        const url = `${import.meta.env.VITE_API_URL}/api/v1/${cleanPath}`
-      const res = await fetch(url,{ method: "HEAD" } 
-);
-
-      if (res.ok) {
-        setIsPdfReady(true);
-      } else {
-        setTimeout(checkFile, 1000);
-      }
-    } catch {
-      setTimeout(checkFile, 1000);
-    }
-  };
-
-  checkFile();
-}, [filePath]);
-
-    useEffect(() => {
-        if (!jobId) return;
-
-        const eventSource = new EventSource(
-            `${import.meta.env.VITE_API_URL}/api/v1/jobs/${jobId}/stream`
-        );
-
-        const nodeMap: Record<string, number> = {
+    function connectSSE() {
+    if (eventSourceRef.current) eventSourceRef.current.close();
+    const es = new EventSource(`${import.meta.env.VITE_API_URL}/api/v1/jobs/${jobId}/stream`);
+    const nodeMap: Record<string, number> = {
             classify: 0,
             // process_text: 1,
             process_plans: 1,
             process_details: 2,
             agent_4_merger: 3
         };
-
-        eventSource.onmessage = async (event) => {
-            console.log("📩 RAW SSE EVENT 👉", event.data);
+    eventSourceRef.current = es;
+    es.onmessage = async (event) => { 
+        console.log("📩 RAW SSE EVENT 👉", event.data);
             let data;
             try {
                 data = JSON.parse(event.data);
@@ -109,13 +68,24 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
             if (data.step === "hitl_review") {
                 console.log("🔥 HITL EVENT FULL 👉", data);
 
-                if (!data.data || !data.data.image_path) {
+                if (!data.data) {
                     console.error("❌ INVALID HITL DATA", data);
                     return;
+                }
+                if (data.data.type === "classify_review") {
+                    setPageMapEdits(data.data.page_map);
                 }
 
                 setHitlData(data.data);
                 setShowHITL(true);
+                setHitlData(data.data);
+                if (data.data.total_hitl_pages !== undefined) {
+                    setHitlProgress({
+                        current: data.data.current_hitl_index,
+                        total: data.data.total_hitl_pages,
+                        remaining: data.data.remaining_after_this
+                    });
+                }
                 return;
             }
             if (!data.step) return;
@@ -142,7 +112,7 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
 
 
             if (status === "completed") {
-                eventSource.close();
+                es.close();
 
                 setLoadingResult(true);
 
@@ -154,17 +124,63 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
 
                 onComplete(result);
             }
-        };
+     };
+    es.onerror = (err) => {
+        console.error("SSE error:", err);
+        es.close();}
 
-        eventSource.onerror = (err) => {
-            console.error("SSE error:", err);
-            eventSource.close();
+    return () => {
+            es.close();
         };
+    }
 
-        return () => {
-            eventSource.close();
-        };
-    }, [jobId]);
+    function normalizePath(path: string) {
+  return path
+    .replace(/^\/+/, "")      // remove leading /
+    .replace(/^data\//, "");  // remove data/
+}
+    
+    const pdfFileObject = useMemo(() => ({url: `${import.meta.env.VITE_API_URL}/api/v1/${normalizePath(filePath)}`}), [filePath]);
+    
+  useEffect(() => {
+    if (hitlData) {
+        console.log("✅ HITL DATA UPDATED 👉", hitlData);
+    }
+}, [hitlData]);
+
+  useEffect(() => {
+    redrawCanvas();
+  }, [bboxes,hitlData, deletedMineruIndices]);
+
+  useEffect(() => {
+    if (!jobId) return;
+    const cleanup = connectSSE();
+    return cleanup;
+}, [jobId]);
+
+  useEffect(() => {
+  if (!filePath) return;
+  console.log("filePath 👉", filePath);
+  const checkFile = async () => {
+    try {
+        const cleanPath = normalizePath(filePath)
+        const url = `${import.meta.env.VITE_API_URL}/api/v1/${cleanPath}`
+      const res = await fetch(url,{ method: "HEAD" } 
+);
+
+      if (res.ok) {
+        setIsPdfReady(true);
+      } else {
+        setTimeout(checkFile, 1000);
+      }
+    } catch {
+      setTimeout(checkFile, 1000);
+    }
+  };
+
+  checkFile();
+}, [filePath]);
+
 
     const imageNaturalW = hitlData?.image_width  ?? 0;
     const imageNaturalH = hitlData?.image_height ?? 0;
@@ -191,14 +207,33 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
 
         // green = auto-detected bboxes from backend (already in image-pixel space)
         if (hitlData?.bboxes?.length) {
-            ctx.strokeStyle = "#22c55e";
-            ctx.lineWidth   = 3;
-            ctx.fillStyle   = "rgba(34,197,94,0.1)";
-            for (const b of hitlData.bboxes) {
+            for (let idx = 0; idx < hitlData.bboxes.length; idx++) {
+                if (deletedMineruIndices.has(idx)) continue;  // skip deleted
+                const b = hitlData.bboxes[idx];
+                const canvas = canvasRef.current!;
+                const displayScale = canvas.width / (canvas.getBoundingClientRect().width || canvas.width);
+                const btnSize = Math.max(30, 20 * displayScale);
+
+                ctx.strokeStyle = "#22c55e";
+                ctx.lineWidth   = 3;
+                ctx.fillStyle   = "rgba(34,197,94,0.1)";
                 ctx.strokeRect(b.x1, b.y1, b.x2 - b.x1, b.y2 - b.y1);
                 ctx.fillRect  (b.x1, b.y1, b.x2 - b.x1, b.y2 - b.y1);
+
+                // × button on green box
+                const btnX = b.x1 + (b.x2 - b.x1) - btnSize;
+                const btnY = b.y1;
+                ctx.fillStyle = "#22c55e";
+                ctx.fillRect(btnX, btnY, btnSize, btnSize);
+                ctx.fillStyle = "white";
+                ctx.font = `bold ${btnSize * 0.75}px sans-serif`;
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText("×", btnX + btnSize / 2, btnY + btnSize / 2);
             }
         }
+        const displayScale = canvas.width / (canvas.getBoundingClientRect().width || canvas.width);
+        const btnSize = Math.max(30, 20 * displayScale);  // at least 30px in image space
 
         // red = user-drawn boxes (stored in image-pixel space)
         ctx.strokeStyle = "#ef4444";
@@ -207,6 +242,20 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
         for (const box of bboxes) {
             ctx.strokeRect(box.x, box.y, box.width, box.height);
             ctx.fillRect  (box.x, box.y, box.width, box.height);
+
+            const btnX = box.x + box.width - btnSize;
+            const btnY = box.y;
+
+            ctx.fillStyle = "#ef4444";
+            ctx.fillRect(btnX, btnY, btnSize, btnSize);
+            ctx.fillStyle = "white";
+            ctx.font = `bold ${btnSize * 0.75}px sans-serif`;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText("X", btnX + btnSize / 2, btnY + btnSize / 2);
+
+            ctx.strokeStyle = "#ef4444";
+            ctx.fillStyle = "rgba(239,68,68,0.1)";
         }
         if (extraRect) {
             ctx.strokeRect(extraRect.x, extraRect.y, extraRect.width, extraRect.height);
@@ -251,6 +300,44 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
         }
     }
 
+    function handleCanvasClick(e: React.MouseEvent<HTMLCanvasElement>) {
+    // Only handle clicks, not drag-ends (drawingRef is already reset by mouseUp)
+    const pos = getRelativePos(e);
+    // Convert display pos back to image coords
+    const imgPos = toImageCoords(pos.x, pos.y);
+
+    const canvas = canvasRef.current!;
+    const displayScale = canvas.width / (canvas.getBoundingClientRect().width || canvas.width);
+    const btnSize = Math.max(30, 20 * displayScale);  
+
+    if (hitlData?.bboxes?.length) {
+        for (let idx = 0; idx < hitlData.bboxes.length; idx++) {
+            if (deletedMineruIndices.has(idx)) continue;
+            const b = hitlData.bboxes[idx];
+            const btnX = b.x1 + (b.x2 - b.x1) - btnSize;
+            const btnY = b.y1;
+            if (imgPos.x >= btnX && imgPos.x <= btnX + btnSize &&
+                imgPos.y >= btnY && imgPos.y <= btnY + btnSize) {
+                setDeletedMineruIndices(prev => new Set([...prev, idx]));
+                return;
+            }
+        }
+    }
+
+    const indexToDelete = bboxes.findIndex(box => {
+        const btnX = box.x + box.width - btnSize;
+        const btnY = box.y;
+        return (
+            imgPos.x >= btnX && imgPos.x <= btnX + btnSize &&
+            imgPos.y >= btnY && imgPos.y <= btnY + btnSize
+        );
+    });
+
+    if (indexToDelete !== -1) {
+        setBboxes(prev => prev.filter((_, i) => i !== indexToDelete));
+    }
+}
+
     function handleImageLoad() {
         const canvas = canvasRef.current;
         const img    = imgRef.current;
@@ -277,17 +364,23 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
         try {
             // merge original auto-detected + user-drawn
             const original = (hitlData?.bboxes ?? []) as {x1:number,y1:number,x2:number,y2:number}[];
-            const merged   = [...original, ...toBackendBboxes()];
+            const survivingMineruBoxes = (hitlData?.bboxes ?? []).filter((_, idx) => !deletedMineruIndices.has(idx));
             await fetch(`${import.meta.env.VITE_API_URL}/api/v1/jobs/${jobId}/hitl`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ corrected_bboxes: toBackendBboxes() }),
+                body: JSON.stringify({
+                corrected_bboxes: [...survivingMineruBoxes.map(b => ({x1:b.x1,y1:b.y1,x2:b.x2,y2:b.y2})), ...toBackendBboxes()],
+                deleted_mineru_bboxes: Array.from(deletedMineruIndices).map(idx => hitlData.bboxes[idx])
+            }),
+                
             });
             setShowHITL(false);
             setHitlData(null);
             setBboxes([]);
+            connectSSE(); 
         } finally {
             setIsSubmitting(false);
+            setDeletedMineruIndices(new Set());
         }
     }
  
@@ -295,9 +388,68 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
         
         <div className="grid grid-cols-2 gap-6 h-full p-6">
           {showHITL && hitlData && (
+            hitlData.type === "classify_review" ? (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+            <div className="bg-white p-4 rounded shadow-lg max-w-xl w-full mx-4">
+                <h3 className="text-base font-medium mb-1">Verify Page Classification</h3>
+                <p className="text-sm text-gray-500 mb-3">
+                    Review the detected page types and correct any mistakes before processing begins.
+                </p>
+                <div className="overflow-auto max-h-[60vh] border rounded divide-y">
+                    {Object.entries(pageMapEdits)
+                        .sort(([a], [b]) => Number(a) - Number(b))
+                        .map(([pageNum, pageType]) => (
+                            <div key={pageNum} className="flex items-center justify-between px-4 py-2">
+                                <span className="text-sm font-medium">Page {Number(pageNum) + 1}</span>
+                                <select
+                                    value={pageType}
+                                    onChange={(e) => setPageMapEdits(prev => ({
+                                        ...prev,
+                                        [pageNum]: e.target.value
+                                    }))}
+                                    className="text-sm border rounded px-2 py-1"
+                                >
+                                    <option value="floor">floor</option>
+                                    <option value="section">section</option>
+                                    <option value="text">text</option>
+                                    <option value="ignore">ignore</option>
+                                </select>
+                            </div>
+                        ))}
+                </div>
+                <div className="flex justify-end mt-4">
+                    <button
+                        disabled={isSubmitting}
+                        onClick={async () => {
+                            setIsSubmitting(true);
+                            await fetch(`${import.meta.env.VITE_API_URL}/api/v1/jobs/${jobId}/hitl`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ corrected_page_map: pageMapEdits })
+                            });
+                            setIsSubmitting(false);
+                            setShowHITL(false);
+                            setHitlData(null);
+                            setPageMapEdits({});
+                            connectSSE();
+                        }}
+                        className="px-4 py-2 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2"
+                    >
+                        {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
+                        Confirm Classification
+                    </button>
+                </div>
+            </div>
+        </div>
+    ):
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
                 <div className="bg-white p-4 rounded shadow-lg max-w-3xl w-full mx-4">
                     <h3 className="text-base font-medium mb-1">Mark missing components</h3>
+                    {hitlProgress && (
+                        <p className="text-sm text-gray-500">
+                          Page {hitlProgress.current} of {hitlProgress.total} — {hitlProgress.remaining} remaining
+                        </p>
+                    )}
                     <p className="text-sm text-gray-500 mb-3">
                         Click and drag to draw boxes. Submit when done or skip to continue.
                     </p>
@@ -319,6 +471,7 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
                             onMouseDown={handleMouseDown}
                             onMouseMove={handleMouseMove}
                             onMouseUp={handleMouseUp}
+                            onClick={handleCanvasClick}
                         />
                     </div>
 
@@ -352,12 +505,18 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
                                     await fetch(`${import.meta.env.VITE_API_URL}/api/v1/jobs/${jobId}/hitl`, {
                                         method: "POST",
                                         headers: { "Content-Type": "application/json" },
-                                        body: JSON.stringify({ corrected_bboxes: [] })
+                                        body: JSON.stringify({ 
+                                            corrected_bboxes: [],
+                                            deleted_mineru_bboxes: []
+                                        })
+        
                                     });
                                     setIsSubmitting(false);
                                     setShowHITL(false);
                                     setHitlData(null);
                                     setBboxes([]);
+                                    setDeletedMineruIndices(new Set())
+                                    connectSSE(); 
                                 }}
                                 className="px-4 py-2 text-sm border rounded hover:bg-gray-50 disabled:opacity-50"
                             >

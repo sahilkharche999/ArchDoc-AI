@@ -81,8 +81,14 @@ export function TraceabilityView({bomData}: TraceabilityViewProps) {
                                                                 </p>
                                                             </div>
                                                         </div>
-                                                        <div className="grid grid-cols-3 gap-4">
+                                                        <div className="flex justify-between  gap-4">
 
+                                                            <div>
+                                                                <p className="text-xs text-muted-foreground mb-1">
+                                                                    Source Sheet
+                                                                </p>
+                                                                <p className="text-sm">{item.source_sheet}</p>
+                                                            </div>
                                                             <div>
                                                                 <p className="text-xs text-muted-foreground mb-1">
                                                                     Source Drawing
