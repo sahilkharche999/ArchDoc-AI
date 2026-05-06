@@ -29,6 +29,8 @@ export function UploadState({onStartProcessing}: UploadStateProps) {
     const [isUploading, setIsUploading] = useState(false);
     const [fileUrl, setFileUrl] = useState<string | null>(null);
     const [pdfVersion, setPdfVersion] = useState(0);
+    const [sheetPrefix, setSheetPrefix] = useState<string>("");
+    const [pdfPageRotations, setPdfPageRotations] = useState<{[key: number]: number}>({});
     const handleDragOver = (e: React.DragEvent) => {
         e.preventDefault();
         setIsDragging(true);
@@ -68,6 +70,8 @@ export function UploadState({onStartProcessing}: UploadStateProps) {
         formData.append("file", file);
         formData.append("start_page", startPage);
         formData.append("end_page", endPage);
+        formData.append("sheet_prefix", sheetPrefix);
+
 
         const response = await fetch(`${import.meta.env.VITE_API_URL}/api/v1/upload`, {
             method: "POST",
@@ -229,7 +233,14 @@ export function UploadState({onStartProcessing}: UploadStateProps) {
                             <Page
                             pageNumber={currentPage}
                             width={400}
-                            rotate={pageRotations[currentPage - 1] || 0}
+                             onLoadSuccess={(page) => {
+                                // page.rotate is the built-in PDF rotation (0, 90, 180, 270)
+                                setPdfPageRotations(prev => ({
+                                    ...prev,
+                                    [currentPage]: page.rotate || 0
+                                }));
+                            }}
+                            rotate={(pageRotations[currentPage - 1] || 0) + (pdfPageRotations[currentPage] || 0)}
                             />
                             </Document>
                             <div className="flex gap-4 items-center">
@@ -298,6 +309,17 @@ export function UploadState({onStartProcessing}: UploadStateProps) {
                                    onChange={(e) => setEndPage(e.target.value)}/>
                         </div>
                     </div>
+
+                     {/* SETTINGS  */}
+                    <Input 
+                        placeholder="Sheet prefix to strip (optional, e.g. FA31137)" 
+                        value={sheetPrefix}
+                        onChange={(e) => setSheetPrefix(e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                        If sheet numbers in title block include a project prefix (e.g. FA31137-ST-DT-0001), 
+                        enter the prefix here so callout references match correctly.
+                    </p>
 
                     {/* Action Button */}
                     <Button

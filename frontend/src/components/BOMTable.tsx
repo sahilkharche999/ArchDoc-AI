@@ -73,7 +73,16 @@ export function BOMTable({bomData, setEditableBom, pricePerLb}: BOMTableProps) {
                                             />
                                         </TableCell>
                                         <TableCell className="text-right text-muted-foreground">
-                                            {item.lb_per_ft.toFixed(2)}
+                                             <input
+                                                type="number"
+                                                value={item.lb_per_ft.toFixed(2)}
+                                                onChange={(e) =>
+                                                    handleChange(index, "lb_per_ft", Number(e.target.value))
+                                                }
+                                                className="w-24 text-right border rounded px-1"
+                                            />
+
+                                       
                                         </TableCell>
                                         <TableCell className="text-right">
                                             {totalWeight.toFixed(2)}

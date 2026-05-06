@@ -41,7 +41,7 @@ def check_prev_result(thread_id: str, state_step: str):
 
     logger.debug(f"Preview (first 1000 chars):\n{data_str[:1000]}")
 
-    with open("bom_output.txt", "w", encoding="utf-8") as f:
+    with open(f"{thread_id}_{state_step}_bom_output.txt", "w", encoding="utf-8") as f:
         f.write(data_str)
 
     logger.info("Full output written to bom_output.txt")

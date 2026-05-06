@@ -1,10 +1,10 @@
 from fastapi import APIRouter
 from fastapi import HTTPException
-
+import threading
 from src.db.get_projects import get_projects as fetch_projects 
 from src.db.get_projects import get_projects_by_id,get_job_progress,update_project,delete_project
 from src.logger import setup_logger
-
+from src.cleanup import wipe_memgraph,wipe_files,wipe_checkpoints
 router = APIRouter(prefix="/projects", tags=["projects"])
 logger = setup_logger(__name__)
 
@@ -79,13 +79,24 @@ def update_project_name(job_id: str, payload: dict):
         logger.error(f"Error fetching project | job_id={job_id} | error={str(e)}")
         raise
 
+def cleanup_all(job_id: str):
+    try:
+        wipe_memgraph(job_id)
+        wipe_checkpoints(job_id)
+        wipe_files(job_id)
+    except Exception as e:
+        print(f"Cleanup failed for {job_id}: {str(e)}")
+
 @router.delete("/{job_id}")
 def delete_project_by_id(job_id: str):
     logger.debug(f"delete project name for job ID: {job_id}")
     try:
         delete_project(job_id=job_id)
+
+        threading.Thread(target=cleanup_all,args=(job_id,)).start()
+
         logger.debug("Project deleted successfully")
-        return {"message": "deleted"}
+        return {"message": "deleted and cleanup started"}
     except HTTPException as e:
         logger.error(f"Error fetching project | job_id={job_id} | error={str(h)}")
         raise

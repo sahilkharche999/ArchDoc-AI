@@ -52,7 +52,8 @@ class ConstructionGraph:
     project_id,
     section_name,
     rule_number,
-    text
+    text,
+    page_num
 ):
         try:
             # 1. Create unique ID
@@ -66,7 +67,11 @@ class ConstructionGraph:
 
             query = """
             MERGE (proj:Project {id: $project_id})
-
+            
+            MERGE (p:Sheet {sheet_number: $project_id, project: $project_id})
+            ON CREATE SET p.page_index = $page_num
+            MERGE (p)-[:BELONGS_TO]->(proj)
+            
             MERGE (s:Section {name: $section_name, project: $project_id})
             MERGE (proj)-[:HAS_SECTION]->(s)
 
@@ -77,6 +82,7 @@ class ConstructionGraph:
             SET r.embedding = $vector
 
             MERGE (s)-[:HAS_RULE]->(r)
+            MERGE (r)-[:FOUND_ON]->(p) 
             """
 
             with self.driver.session() as session:
@@ -87,7 +93,8 @@ class ConstructionGraph:
                     rule_id=rule_id,
                     text=text,
                     rule_number=rule_number,
-                    vector=vector
+                    vector=vector,
+                    page_num=page_num
                 )
 
         except Exception as e:
@@ -130,12 +137,12 @@ class ConstructionGraph:
 
             MERGE (p)-[:BELONGS_TO]->(proj)
 
-            MERGE (d:Definition {id: $symbol, schedule: $schedule_name, project: $project_id})
+            MERGE (d:Definition {id: $symbol, project: $project_id})
             SET d:Schedule
+            SET d.schedule_name = $schedule_name
             SET d.name = $schedule_name
             SET d.columns = $columns
             SET d.row = $row_json
-
             SET d.text = $description
             SET d.embedding = $vector
 
@@ -199,7 +206,8 @@ class ConstructionGraph:
             {
                 "item_name": m.get("item_name", ""),
                 "qty_rule": m.get("qty_rule") or "",
-                "notes": m.get("notes") or ""
+                "notes": m.get("notes") or "",
+                "inherited_from": m.get("inherited_from") or ""  
             }
             for m in materials_list
         ]
@@ -230,7 +238,7 @@ class ConstructionGraph:
         // Create Component Nodes (The Ingredients)
         FOREACH (mat IN $materials |
             MERGE (c:Component {name: mat.item_name, project: $project_id})
-            MERGE (d)-[:CONTAINS {qty_rule: mat.qty_rule, notes: mat.notes}]->(c)
+            MERGE (d)-[:CONTAINS {qty_rule: mat.qty_rule, notes: mat.notes,inherited_from: mat.inherited_from}]->(c)
         )
         """
         for attempt in range(5):
@@ -262,7 +270,7 @@ class ConstructionGraph:
     f"Neo4j write failed after retries | project_id={project_id} | detail_key={detail_key}"
 )
         raise Exception("Neo4j write failed after retries")
-
+    
     # --- RETRIEVAL (GraphRAG Search) ---
 
     def semantic_search(self, query_text, project_id, sheet_number=None, limit=3):
@@ -283,19 +291,21 @@ class ConstructionGraph:
         query = """
         // 1. Find the Detail Node
         CALL vector_search.search('definition_index', $limit, $vector)
-        YIELD node, score
+        YIELD node, similarity
         MATCH (node)-[:FOUND_ON]->(p:Sheet)
         WHERE node.project = $project_id
         AND ($sheet_number IS NULL OR p.sheet_number = $sheet_number)
 
-        RETURN 
+        RETURN
             node.id as ID,
             node.title as Title,
             node.row as Rows,
             node.columns as Columns,
             node.bom as BOM,
             node.fabrication as fabrication,
-            coalesce(score, 0.0) as score
+            similarity as score
+        ORDER BY similarity DESC
+        LIMIT $limit
         """
         with self.driver.session() as session:
             result = session.run(
@@ -303,7 +313,7 @@ class ConstructionGraph:
                 vector=vector,
                 project_id=project_id,
                 sheet_number=sheet_number,
-                limit=limit
+                limit=limit * 20
             )
             records = list(result)
             final = []
