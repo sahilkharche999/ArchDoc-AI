@@ -134,8 +134,8 @@ def start_job(request: StartJobRequest):
                     continue
 
                 if "__interrupt__" in event:
-                    logger.info("🚨 INTERRUPT DETECTED")
-                    logger.info(f"RAW INTERRUPT 👉 {event['__interrupt__']}")
+                    logger.info("INTERRUPT DETECTED")
+                    logger.info(f"RAW INTERRUPT  {event['__interrupt__']}")
                     interrupt_obj = event["__interrupt__"]
 
                     if isinstance(interrupt_obj, tuple):
@@ -144,8 +144,8 @@ def start_job(request: StartJobRequest):
                     review_data = interrupt_obj
                     while hasattr(review_data, "value"):
                         review_data = review_data.value
-                    logger.info(f"✅ CLEAN REVIEW DATA 👉 {review_data}")
-                    logger.info("📤 SENDING HITL TO FRONTEND")
+                    logger.info(f" CLEAN REVIEW DATA -> {review_data}")
+                    logger.info(" SENDING HITL TO FRONTEND")
 
                     redis_conn.redis_client.set(
                         f"hitl:{job_id}",
@@ -202,38 +202,13 @@ def get_hitl(job_id: str):
 
 @router.post("/jobs/{job_id}/hitl")
 def submit_hitl(job_id: str, payload: dict):
-    # corrected_bboxes = payload["corrected_bboxes"]
-    # resume_payload = {
-    #     "corrected_bboxes": payload["corrected_bboxes"]
-    # }
+
     resume_payload=payload
-    logger.info(f"🔄 RESUME STARTED | job_id={job_id}")
-    logger.info(f"📥 RESUME PAYLOAD 👉 {resume_payload}")
+    logger.info(f" RESUME STARTED | job_id={job_id}")
+    logger.info(f" RESUME PAYLOAD -> {resume_payload}")
     def resume():
 
         redis_conn.redis_client.delete(f"hitl:{job_id}")
-        # config = {"configurable": {"thread_id": job_id}}
-        # snapshot = app.get_state(config)
-        # current_page     = snapshot.values.get("current_page")
-        # current_sec_page = snapshot.values.get("current_section_page")
-        # if current_page and current_page.get("status") == "waiting_for_hitl":
-        #     updated_page = {
-        #         **current_page,
-        #         "corrected_bboxes": corrected_bboxes,
-        #         "status": "resumed"
-        #     }
-        #     app.update_state(config, {"current_page": updated_page})
-        #     logger.info(f" Injected corrected_bboxes into current_page | page={current_page['page_num']}")
-
-        # elif current_sec_page and current_sec_page.get("status") == "waiting_for_hitl":
-        #     updated_sec = {
-        #         **current_sec_page,
-        #         "corrected_bboxes": corrected_bboxes,
-        #         "status": "resumed"
-        #     }
-        #     app.update_state(config, {"current_section_page": updated_sec})
-        #     logger.info(f" Injected corrected_bboxes into current_section_page | page={current_sec_page['page_num']}")
-
 
         for thread_id, event in stream_estimation(
             job_id,
@@ -241,13 +216,13 @@ def submit_hitl(job_id: str, payload: dict):
             None,
             command=Command(resume=resume_payload)
         ):
-            logger.info(f"🔁 RESUME EVENT 👉 {event}")
+            logger.info(f" RESUME EVENT -> {event}")
 
             if not isinstance(event, dict):
                 continue
 
             if "__interrupt__" in event:
-                logger.info("🚨 INTERRUPT AGAIN AFTER RESUME")
+                logger.info(" INTERRUPT AGAIN AFTER RESUME")
                 interrupt_obj = event["__interrupt__"]
 
                 if isinstance(interrupt_obj, tuple):
@@ -273,7 +248,7 @@ def submit_hitl(job_id: str, payload: dict):
                 return
 
             for node_name, _ in event.items():
-                logger.info(f"➡️ NEXT NODE AFTER RESUME 👉 {node_name}")
+                logger.info(f" NEXT NODE AFTER RESUME -> {node_name}")
                 redis_conn.redis_client.publish(
                     job_id,
                     dumps({

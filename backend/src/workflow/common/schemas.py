@@ -108,30 +108,6 @@ class PlanExtraction(BaseModel):
     global_notes: List[str] = Field(default=[])
 
 
-# Schema for Agent 4 (Final Merger)
-# class BillOfMaterialItem(BaseModel):
-#     description: str = Field(description="Human readable description e.g. 'Beam at Grid A'")
-#     material_size: str = Field(description="MUST match a value from the Valid Material List e.g. 'W24X62'")
-#     # The Core Metrics
-#     total_linear_feet: float = Field(description="Total length in feet")
-#     quantity: int = Field(description="Count of pieces")
-
-#     # Fabrication Metrics
-#     total_bolts: int = Field(default=0)
-#     total_holes: int = Field(default=0)
-#     total_weld_inches: float = Field(default=0.0)
-#     lb_per_ft: float | None = None
-#     total_weight_lbs: float | None = None
-#     charge_per_lb: float | None = None
-#     # The "Why" (CoT)
-#     logic_trace: str = Field(
-#         description="Explanation of the calculation. E.g. 'Found 5 cols. Height 18ft from Roof Note. 5*18=90ft.'")
-#     source_drawing: str
-
-
-# class FinalEstimation(BaseModel):
-#     project_summary: str = Field(description="High-level summary of what was estimated")
-#     final_bill_of_materials: List[BillOfMaterialItem]
 
 class BillOfMaterialItem(BaseModel):
     description: str = Field(description="Human readable description e.g. 'Beam at Grid A'")

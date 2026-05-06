@@ -482,19 +482,6 @@ def node_process_plans(state: ProjectState,config):
                         logger.debug(f"Removed MinerU image ({reason}): {full_img_path}")
                 else:
                     cleaned_json_list.append(item)
-                # replaced = False
-                # for hbbox in hitl_bboxes_mineru:
-                #     if _bbox_overlap_ratio(item_bbox, hbbox) > 0.3:
-                #         # Delete the actual image file too
-                #         img_path_in_json = item.get("content", {}).get("image_source", {}).get("path", "")
-                #         full_img_path = os.path.join(images_dir, os.path.basename(img_path_in_json))
-                #         if os.path.exists(full_img_path):
-                #             os.remove(full_img_path)
-                #             logger.debug(f"Deleted replaced MinerU image: {full_img_path}")
-                #         replaced = True
-                #         break
-                # if not replaced:
-                #     cleaned_json_list.append(item)
             else:
                 cleaned_json_list.append(item)
         json_list = cleaned_json_list
@@ -868,19 +855,6 @@ def node_process_details(state: ProjectState,config):
                         logger.debug(f"Removed MinerU image ({reason}): {full_img_path}")
                 else:
                     cleaned_json_list.append(item)
-                # replaced = False
-                # for hbbox in hitl_bboxes_mineru:
-                #     if _bbox_overlap_ratio(item_bbox, hbbox) > 0.3:
-                #         # Delete the actual image file too
-                #         img_path_in_json = item.get("img_path", "")
-                #         full_img_path = os.path.join(images_dir, os.path.basename(img_path_in_json))
-                #         if os.path.exists(full_img_path):
-                #             os.remove(full_img_path)
-                #             logger.debug(f"Deleted replaced MinerU image: {full_img_path}")
-                #         replaced = True
-                #         break
-                # if not replaced:
-                #     cleaned_json_list.append(item)
             else:
                 cleaned_json_list.append(item)
         json_list = cleaned_json_list
