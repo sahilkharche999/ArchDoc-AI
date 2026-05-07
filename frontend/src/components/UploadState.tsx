@@ -107,7 +107,7 @@ export function UploadState({onStartProcessing}: UploadStateProps) {
     const formData = new FormData();
     formData.append("file", file);
     formData.append("rotation_map", JSON.stringify(pageRotations));
-    console.log("🚀 Sending rotation map:", pageRotations);
+    console.log("Sending rotation map:", pageRotations);
 
     const response = await fetch(
       `${import.meta.env.VITE_API_URL}/api/v1/pdf/fix`,
@@ -227,7 +227,7 @@ export function UploadState({onStartProcessing}: UploadStateProps) {
                                     onDocumentLoadSuccess(data);
                                 }}
                                 onLoadError={(err) => {
-                                    console.error("❌ PDF LOAD ERROR:", err);
+                                    console.error(" PDF LOAD ERROR:", err);
                                 }}
                                loading={<p>Loading preview...</p>}>
                             <Page

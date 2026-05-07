@@ -38,6 +38,7 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
     const [deletedMineruIndices, setDeletedMineruIndices] = useState<Set<number>>(new Set());
     const [hitlProgress, setHitlProgress] = useState<{current: number, total: number, remaining: number} | null>(null);
     const eventSourceRef = useRef<EventSource | null>(null);
+    const [activeStep, setActiveStep] = useState<number>(0);
 
     
     function onDocumentLoadSuccess({numPages}: { numPages: number }) {
@@ -56,20 +57,20 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
         };
     eventSourceRef.current = es;
     es.onmessage = async (event) => { 
-        console.log("📩 RAW SSE EVENT 👉", event.data);
+        console.log(" RAW SSE EVENT ", event.data);
             let data;
             try {
                 data = JSON.parse(event.data);
             } catch (e) {
-                console.error("❌ JSON parse failed", event.data);
+                console.error("JSON parse failed", event.data);
                 return;
             }
-            console.log("✅ PARSED SSE 👉", data);
+            console.log(" PARSED SSE ", data);
             if (data.step === "hitl_review") {
-                console.log("🔥 HITL EVENT FULL 👉", data);
+                console.log(" HITL EVENT FULL ", data);
 
                 if (!data.data) {
-                    console.error("❌ INVALID HITL DATA", data);
+                    console.error(" INVALID HITL DATA", data);
                     return;
                 }
                 if (data.data.type === "classify_review") {
@@ -92,7 +93,7 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
             const step = data.step?.toLowerCase().trim();
             const status = data.status?.toLowerCase();
 
-            console.log("➡️ STEP UPDATE", step, status);
+            console.log(" STEP UPDATE", step, status);
 
             
 
@@ -104,10 +105,11 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
             console.log(`Here is the current step: ${stepIndex}`)
             if (stepIndex !== undefined) {
                 const completed = [];
-                for (let i = 0; i <= stepIndex; i++) {
+                for (let i = 0; i <stepIndex; i++) {
                     completed.push(i);
                 }
                 setCompletedSteps(completed);
+                setActiveStep(stepIndex); 
             }
 
 
@@ -144,7 +146,7 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
     
   useEffect(() => {
     if (hitlData) {
-        console.log("✅ HITL DATA UPDATED 👉", hitlData);
+        console.log(" HITL DATA UPDATED ->", hitlData);
     }
 }, [hitlData]);
 
@@ -160,7 +162,7 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
 
   useEffect(() => {
   if (!filePath) return;
-  console.log("filePath 👉", filePath);
+  console.log("filePath ->", filePath);
   const checkFile = async () => {
     try {
         const cleanPath = normalizePath(filePath)
@@ -599,12 +601,7 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
                                     key={index}
                                     label={step.label}
                                     isCompleted={completedSteps.includes(index)}
-                                    isActive={
-                                            index === 0
-                                            ? completedSteps.length === 0
-                                            : !completedSteps.includes(index) &&
-                                            completedSteps.includes(index - 1)
-                                            }
+                                    isActive={index === activeStep && !completedSteps.includes(index)}
                                 />
                             ))}
                         </div>

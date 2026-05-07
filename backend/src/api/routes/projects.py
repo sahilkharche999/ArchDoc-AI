@@ -5,6 +5,7 @@ from src.db.get_projects import get_projects as fetch_projects
 from src.db.get_projects import get_projects_by_id,get_job_progress,update_project,delete_project
 from src.logger import setup_logger
 from src.cleanup import wipe_memgraph,wipe_files,wipe_checkpoints
+from src.api.routes.jobs import cancelled_jobs
 router = APIRouter(prefix="/projects", tags=["projects"])
 logger = setup_logger(__name__)
 
@@ -91,8 +92,8 @@ def cleanup_all(job_id: str):
 def delete_project_by_id(job_id: str):
     logger.debug(f"delete project name for job ID: {job_id}")
     try:
+        cancelled_jobs.add(job_id) 
         delete_project(job_id=job_id)
-
         threading.Thread(target=cleanup_all,args=(job_id,)).start()
 
         logger.debug("Project deleted successfully")

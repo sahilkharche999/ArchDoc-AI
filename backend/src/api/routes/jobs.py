@@ -27,6 +27,7 @@ logger = setup_logger(__name__)
 router = APIRouter()
 EXCEL_PATH = os.getenv("EXCEL_PATH", "Steel Estimator.xlsx")
 MATERIAL_LOOKUP = load_material_weights(EXCEL_PATH)
+cancelled_jobs = set()
 
 def event_generator(job_id:str):
 
@@ -37,6 +38,10 @@ def event_generator(job_id:str):
         pending_hitl = redis_conn.redis_client.get(f"hitl:{job_id}")
         if pending_hitl:
             review_data = json.loads(pending_hitl)
+            if review_data.get('type') == 'bbox_review':
+                yield f"data: {json.dumps({'step': 'process_plans', 'status': 'processing'})}\n\n"
+            elif review_data.get('type') == 'section_review':
+                yield f"data: {json.dumps({'step': 'process_details', 'status': 'processing'})}\n\n"
             yield f"data: {json.dumps({'step': 'hitl_review', 'status': 'waiting_for_user', 'data': review_data})}\n\n"
         progress = get_job_progress(job_id)
         if progress:
@@ -128,6 +133,11 @@ def start_job(request: StartJobRequest):
         try:
             sheet_prefix = redis_conn.redis_client.get(f"sheet_prefix:{job_id}") or ""
             for thread_id, event in stream_estimation(job_id, file_path, output_dir,sheet_prefix=sheet_prefix):
+    
+                if job_id in cancelled_jobs:
+                    logger.info(f"Job cancelled, stopping | job_id={job_id}")
+                    cancelled_jobs.discard(job_id)
+                    return
                 logger.info(f"STREAM EVENT 👉 {event}")
 
                 if not isinstance(event, dict):
@@ -184,6 +194,10 @@ def start_job(request: StartJobRequest):
             logger.info(f"Job completed successfully | job_id={job_id}")
 
         except Exception as e:
+            if job_id in cancelled_jobs:
+                logger.info(f"Job cancelled, stopping | job_id={job_id}")
+                cancelled_jobs.discard(job_id)
+                return
             logger.error(f"Processing failed | job_id={job_id} | error={str(e)}")
 
     threading.Thread(target=run).start()
@@ -209,61 +223,75 @@ def submit_hitl(job_id: str, payload: dict):
     def resume():
 
         redis_conn.redis_client.delete(f"hitl:{job_id}")
-
-        for thread_id, event in stream_estimation(
-            job_id,
-            None,
-            None,
-            command=Command(resume=resume_payload)
-        ):
-            logger.info(f" RESUME EVENT -> {event}")
-
-            if not isinstance(event, dict):
-                continue
-
-            if "__interrupt__" in event:
-                logger.info(" INTERRUPT AGAIN AFTER RESUME")
-                interrupt_obj = event["__interrupt__"]
-
-                if isinstance(interrupt_obj, tuple):
-                    interrupt_obj = interrupt_obj[0]
-
-                review_data = interrupt_obj
-                while hasattr(review_data, "value"):
-                    review_data = review_data.value
-
-                redis_conn.redis_client.set(
-                    f"hitl:{job_id}",
-                    dumps(review_data)
-                )
-
-                redis_conn.redis_client.publish(
-                    job_id,
-                    dumps({
-                        "step": "hitl_review",
-                        "status": "waiting_for_user",
-                        "data": review_data
-                    })
-                )
-                return
-
-            for node_name, _ in event.items():
-                logger.info(f" NEXT NODE AFTER RESUME -> {node_name}")
-                redis_conn.redis_client.publish(
-                    job_id,
-                    dumps({
-                        "step": node_name,
-                        "status": "processing"
-                    })
-                )
+        try:
+            for thread_id, event in stream_estimation(
+                job_id,
+                None,
+                None,
+                command=Command(resume=resume_payload)
+            ):
                 
-        update_job_progress(job_id, "completed", "agent_4_merger")
-        redis_conn.redis_client.publish(job_id, json.dumps({
-            "step": "agent_4_merger",
-            "status": "completed"
-        }))
-        logger.info(f"Job completed after resume | job_id={job_id}")
+                if job_id in cancelled_jobs:
+                        logger.info(f"Job cancelled during resume, stopping | job_id={job_id}")
+                        cancelled_jobs.discard(job_id)
+                        return
+                logger.info(f" RESUME EVENT -> {event}")
 
+                if not isinstance(event, dict):
+                    continue
+
+                if "__interrupt__" in event:
+                    logger.info(" INTERRUPT AGAIN AFTER RESUME")
+                    interrupt_obj = event["__interrupt__"]
+
+                    if isinstance(interrupt_obj, tuple):
+                        interrupt_obj = interrupt_obj[0]
+
+                    review_data = interrupt_obj
+                    while hasattr(review_data, "value"):
+                        review_data = review_data.value
+
+                    redis_conn.redis_client.set(
+                        f"hitl:{job_id}",
+                        dumps(review_data)
+                    )
+
+                    redis_conn.redis_client.publish(
+                        job_id,
+                        dumps({
+                            "step": "hitl_review",
+                            "status": "waiting_for_user",
+                            "data": review_data
+                        })
+                    )
+                    return
+
+                for node_name, _ in event.items():
+                    logger.info(f" NEXT NODE AFTER RESUME -> {node_name}")
+                    ui_step = "process_plans" if node_name == "classify" else node_name
+                    redis_conn.redis_client.publish(
+                        job_id,
+                        dumps({
+                            "step": ui_step,
+                            "status": "processing"
+                        })
+                    )
+         
+            update_job_progress(job_id, "completed", "agent_4_merger")
+            redis_conn.redis_client.publish(job_id, json.dumps({
+                "step": "agent_4_merger",
+                "status": "completed"
+            }))
+            logger.info(f"Job completed after resume | job_id={job_id}")
+                   
+        except Exception as e:
+            if job_id in cancelled_jobs:
+                logger.info(f"Job cancelled during resume, stopping | job_id={job_id}")
+                cancelled_jobs.discard(job_id)
+                return
+            logger.error(f"Resume failed | job_id={job_id} | error={str(e)}")     
+
+        
     threading.Thread(target=resume).start()
 
     return {"message": "resumed"}
