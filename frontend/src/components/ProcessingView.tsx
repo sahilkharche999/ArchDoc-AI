@@ -102,18 +102,24 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
                 return;
             }
             const stepIndex = nodeMap[step];
-            console.log(`Here is the current step: ${stepIndex}`)
             if (stepIndex !== undefined) {
-                const completed = [];
-                for (let i = 0; i <stepIndex; i++) {
-                    completed.push(i);
+                
+                if (status === "completed" && step !== "agent_4_merger") {
+                    // explicit completed for a mid-step — mark it and all before as done
+                    const completed = [];
+                    for (let i = 0; i <= stepIndex; i++)completed.push(i);
+                    setCompletedSteps(completed);
+                    setActiveStep(stepIndex + 1);
+                } else {
+                    const completed = [];
+                    for (let i = 0; i < stepIndex; i++) completed.push(i);
+                
+                    setCompletedSteps(completed);
+                    setActiveStep(stepIndex);
                 }
-                setCompletedSteps(completed);
-                setActiveStep(stepIndex); 
             }
 
-
-            if (status === "completed") {
+            if (status === "completed" && step === "agent_4_merger"){
                 es.close();
 
                 setLoadingResult(true);

@@ -39,17 +39,27 @@ def event_generator(job_id:str):
         if pending_hitl:
             review_data = json.loads(pending_hitl)
             if review_data.get('type') == 'bbox_review':
+                update_job_progress(job_id, "processing", "process_plans")
                 yield f"data: {json.dumps({'step': 'process_plans', 'status': 'processing'})}\n\n"
             elif review_data.get('type') == 'section_review':
+                update_job_progress(job_id, "processing", "process_details")
                 yield f"data: {json.dumps({'step': 'process_details', 'status': 'processing'})}\n\n"
             yield f"data: {json.dumps({'step': 'hitl_review', 'status': 'waiting_for_user', 'data': review_data})}\n\n"
         progress = get_job_progress(job_id)
         if progress:
-            payload = {
-                    "step": progress[2],
-                    "status": progress[1]
-                }
-            yield f"data: {json.dumps(payload)}\n\n"
+            current_step = progress[2]
+            status = progress[1]
+            
+            # Step order — send all previous steps as completed first
+            step_order = ["classify", "process_plans", "process_details", "agent_4_merger"]
+            
+            if current_step in step_order and status == "processing":
+                idx = step_order.index(current_step)
+                # Mark all steps before current as completed
+                for prev_step in step_order[:idx]:
+                    yield f"data: {json.dumps({'step': prev_step, 'status': 'completed'})}\n\n"
+            
+            yield f"data: {json.dumps({'step': current_step, 'status': status})}\n\n"
         last_heartbeat = time.time()
         while True:
             message = pubsub.get_message(ignore_subscribe_messages=True)
@@ -175,6 +185,7 @@ def start_job(request: StartJobRequest):
 
             
                 for node_name, _ in event.items():
+                    update_job_progress(job_id, "processing", node_name) 
                     redis_conn.redis_client.publish(
                         job_id,
                         dumps({
@@ -221,8 +232,40 @@ def submit_hitl(job_id: str, payload: dict):
     logger.info(f" RESUME STARTED | job_id={job_id}")
     logger.info(f" RESUME PAYLOAD -> {resume_payload}")
     def resume():
-
+        pending = redis_conn.redis_client.get(f"hitl:{job_id}")
+        hitl_type = None
+        if pending:
+            try:
+                pending_data = json.loads(pending)
+                hitl_type = pending_data.get("type")
+                remaining_after_this = pending_data.get("remaining_after_this", 0)
+            except:
+                pass
         redis_conn.redis_client.delete(f"hitl:{job_id}")
+
+        # Decide UI step based on which HITL we just left
+        if hitl_type == "classify_review":
+            next_ui_step = "process_plans"
+        elif hitl_type == "bbox_review":
+            next_ui_step = "process_plans" if remaining_after_this > 0 else "process_details"
+        elif hitl_type == "section_review":
+            next_ui_step = "process_details" if remaining_after_this > 0 else "agent_4_merger"
+        else:
+            next_ui_step = None
+
+        # Mark previous step as done in DB and tell frontend
+        if next_ui_step:
+            step_order = ["classify", "process_plans", "process_details", "agent_4_merger"]
+            idx = step_order.index(next_ui_step)
+            # Mark all previous as completed
+            for prev in step_order[:idx]:
+                redis_conn.redis_client.publish(job_id, dumps({"step": prev, "status": "completed"}))
+            update_job_progress(job_id, "processing", next_ui_step)
+            redis_conn.redis_client.publish(job_id, dumps({"step": next_ui_step, "status": "processing"}))
+
+        
+
+  
         try:
             for thread_id, event in stream_estimation(
                 job_id,
@@ -235,6 +278,7 @@ def submit_hitl(job_id: str, payload: dict):
                         logger.info(f"Job cancelled during resume, stopping | job_id={job_id}")
                         cancelled_jobs.discard(job_id)
                         return
+                
                 logger.info(f" RESUME EVENT -> {event}")
 
                 if not isinstance(event, dict):
@@ -266,17 +310,24 @@ def submit_hitl(job_id: str, payload: dict):
                     )
                     return
 
-                for node_name, _ in event.items():
+                for node_name, state_update in event.items():
                     logger.info(f" NEXT NODE AFTER RESUME -> {node_name}")
-                    ui_step = "process_plans" if node_name == "classify" else node_name
-                    redis_conn.redis_client.publish(
-                        job_id,
-                        dumps({
-                            "step": ui_step,
-                            "status": "processing"
-                        })
-                    )
-         
+                    if node_name == "process_details" and isinstance(state_update, dict):
+                        remaining = state_update.get("remaining_section_pages", [])
+                        if len(remaining) == 0:
+                            step_order = ["classify", "process_plans", "process_details", "agent_4_merger"]
+                            for prev in step_order[:3]:
+                                redis_conn.redis_client.publish(job_id, dumps({"step": prev, "status": "completed"}))
+                            update_job_progress(job_id, "processing", "agent_4_merger")
+                            redis_conn.redis_client.publish(job_id, dumps({"step": "agent_4_merger", "status": "processing"}))
+                    
+                    if node_name == "agent_4_merger":
+                        step_order = ["classify", "process_plans", "process_details", "agent_4_merger"]
+                        for prev in step_order[:3]:
+                            redis_conn.redis_client.publish(job_id, dumps({"step": prev, "status": "completed"}))
+                        update_job_progress(job_id, "processing", "agent_4_merger")
+                        redis_conn.redis_client.publish(job_id, dumps({"step": "agent_4_merger", "status": "processing"}))
+                   
             update_job_progress(job_id, "completed", "agent_4_merger")
             redis_conn.redis_client.publish(job_id, json.dumps({
                 "step": "agent_4_merger",

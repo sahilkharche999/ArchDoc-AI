@@ -755,7 +755,7 @@ def node_process_details(state: ProjectState,config):
         total_section = len([p for p, t in state["page_map"].items() if t == "section"])
         remaining_section = len(state.get("remaining_section_pages", []))
         review_data = {
-            "type": "bbox_review",
+            "type": "section_review",
             "image_path":   image_url,
             "page_num":     page_num,
             "bboxes":       detected_bboxes,
