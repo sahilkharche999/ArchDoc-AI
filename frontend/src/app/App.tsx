@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Routes, Route, Navigate, useNavigate } from "react-router-dom";
+import { Routes, Route, Navigate, useNavigate ,useLocation} from "react-router-dom";
 
 import { Intro } from "../components/Intro";
 import { ProjectGrid } from "../components/ProjectGrid";
@@ -15,6 +15,7 @@ export default function App() {
   
 
   // fetch projects
+  const location = useLocation();
   useEffect(() => {
     const fetchProjects = async () => {
       try {
@@ -27,9 +28,10 @@ export default function App() {
         console.error("Failed to fetch projects", err);
       }
     };
-
-    fetchProjects();
-  }, []);
+     if (location.pathname === "/projects") {
+      fetchProjects();
+    }
+  }, [location.pathname]);
 
   return (
     <Routes>

@@ -46,6 +46,9 @@ export function UploadState({onStartProcessing}: UploadStateProps) {
         const droppedFile = e.dataTransfer.files[0];
         if (droppedFile && droppedFile.type === "application/pdf") {
             setFile(droppedFile);
+            setFileUrl(URL.createObjectURL(droppedFile));
+            setShowPreview(true);
+            setNeedsRotation(null);
         }
     };
 

@@ -2,6 +2,7 @@ import {Badge} from "./ui/badge";
 import {Button} from "./ui/button";
 import {Plus} from "lucide-react";
 import {useEffect, useState} from "react";
+import {useNavigate} from "react-router-dom";
 import {Project} from "../types/project";
 import logo from '../assets/dax_mfg_logo.jpeg'
 
@@ -13,6 +14,7 @@ interface SidebarProps {
 
 export function Sidebar({onNewEstimation, selectedProjectId, onSelectProject}: SidebarProps) {
     const [projects, setProjects] = useState<Project[]>([]);
+    const navigate = useNavigate();
     useEffect(() => {
         const fetchProjects = async () => {
             try {
@@ -97,11 +99,12 @@ export function Sidebar({onNewEstimation, selectedProjectId, onSelectProject}: S
             await fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects/${jobId}`, {
                 method: "DELETE"
             });
-
-            setProjects(prev => prev.filter(p => p.job_id !== jobId));
-
         } catch (err) {
             console.error("Delete failed", err);
+        }
+        setProjects(prev => prev.filter(p => p.job_id !== jobId));
+        if (jobId === selectedProjectId) {
+            navigate("/projects", { replace: true });
         }
     };
 

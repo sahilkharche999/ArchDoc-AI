@@ -67,7 +67,7 @@ def event_generator(job_id:str):
                 data = json.loads(message["data"])
                 logger.debug(f"SSE send | {data}")
                 yield f"data: {json.dumps(data)}\n\n"
-                if data.get("status") == "completed":
+                if data.get("status") in ("completed", "failed"):
                     yield f"data: {json.dumps(data)}\n\n"
                     time.sleep(0.5)
                     break
@@ -210,6 +210,13 @@ def start_job(request: StartJobRequest):
                 cancelled_jobs.discard(job_id)
                 return
             logger.error(f"Processing failed | job_id={job_id} | error={str(e)}")
+            try:
+                update_job_progress(job_id, "failed", None)
+            except Exception:
+                pass 
+            redis_conn.redis_client.publish(job_id, json.dumps({
+                "step": None, "status": "failed", "error": str(e)
+            }))
 
     threading.Thread(target=run).start()
 
@@ -341,6 +348,13 @@ def submit_hitl(job_id: str, payload: dict):
                 cancelled_jobs.discard(job_id)
                 return
             logger.error(f"Resume failed | job_id={job_id} | error={str(e)}")     
+            try:
+                update_job_progress(job_id, "failed", None)
+            except Exception:
+                pass 
+            redis_conn.redis_client.publish(job_id, json.dumps({
+                "step": None, "status": "failed", "error": str(e)
+            }))
 
         
     threading.Thread(target=resume).start()

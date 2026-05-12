@@ -11,6 +11,7 @@ interface ProcessingViewProps {
     jobId: string;
     filePath: string;
     onComplete: (result: any) => void;
+    onFailed?:()=>void;
 }
 
 const steps = [
@@ -21,7 +22,7 @@ const steps = [
     {label: "Bill of Materials Generated"}    // agent_4_merger
 ];
 
-export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewProps) {
+export function ProcessingView({jobId, filePath, onComplete, onFailed}: ProcessingViewProps) {
     const [completedSteps, setCompletedSteps] = useState<number[]>([]);
     const [loadingResult, setLoadingResult] = useState(false);
     const [numPages, setNumPages] = useState<number>();
@@ -39,6 +40,8 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
     const [hitlProgress, setHitlProgress] = useState<{current: number, total: number, remaining: number} | null>(null);
     const eventSourceRef = useRef<EventSource | null>(null);
     const [activeStep, setActiveStep] = useState<number>(0);
+    const [hasFailed, setHasFailed] = useState(false);
+
 
     
     function onDocumentLoadSuccess({numPages}: { numPages: number }) {
@@ -66,6 +69,12 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
                 return;
             }
             console.log(" PARSED SSE ", data);
+            if (data.status === "failed") {
+                es.close();
+                setHasFailed(true);
+                onFailed?.();
+                return;
+            }
             if (data.step === "hitl_review") {
                 console.log(" HITL EVENT FULL ", data);
 
@@ -135,7 +144,10 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
      };
     es.onerror = (err) => {
         console.error("SSE error:", err);
-        es.close();}
+        setHasFailed(true);
+        es.close();
+        onFailed?.();
+    }
 
     return () => {
             es.close();
@@ -601,6 +613,12 @@ export function ProcessingView({jobId, filePath, onComplete,}: ProcessingViewPro
                 <Card>
                     <CardContent className="p-6">
                         <h2 className="text-xl mb-6">Processing Drawings</h2>
+                        {activeStep === -1 && (
+                            <div className="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-500 text-sm">
+                                ⚠ Processing failed. Please delete this project and try again.
+                            </div>
+                        )}
+                         
                         <div className="space-y-4">
                             {steps.map((step, index) => (
                                 <ProcessingStep
