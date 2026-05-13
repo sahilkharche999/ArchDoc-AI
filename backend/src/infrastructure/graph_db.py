@@ -271,6 +271,51 @@ class ConstructionGraph:
 )
         raise Exception("Neo4j write failed after retries")
     
+    def get_all_definitions_for_sheet(self,project_id:str,sheet_number:str):
+        """
+        Returns all Definition nodes (schedules, rules, notes) found on a specific sheet.
+        Used by Agent 4 to resolve text marks like CW1, F11, MW1 that aren't inside symbols.
+        """
+        query="""
+        MATCH (n:Definition)-[:FOUND_ON]->(p:Sheet)
+        WHERE n.project= $project_id AND p.sheet_number= $sheet_number
+        RETURN
+        n.id as ID,
+        n.title as Title,
+        n.text as Text,
+        n.row as Rows,
+        n.columns as Columns,
+        n.schedule_name as ScheduleName,
+        n.bom as BOM,
+        labels(n) as Labels
+        """
+        with self.driver.session() as session:
+            result=session.run(
+                query=query,
+                project_id=project_id,
+                sheet_number=sheet_number
+            )
+            records = list(result)
+            definitions=[]
+            for r in records:
+                data = r.data()
+                if data.get("BOM"):
+                    try:
+                        data["BOM"] = json.loads(data["BOM"])
+                    except:
+                        pass
+                if data.get("Rows"):
+                    try:
+                        data["Rows"] = json.loads(data["Rows"])
+                    except:
+                        pass
+                definitions.append(data)
+
+            logger.debug(
+            f"Sheet definitions fetched | project={project_id} | sheet={sheet_number} | count={len(definitions)}"
+              )
+            return definitions
+
     # --- RETRIEVAL (GraphRAG Search) ---
 
     def semantic_search(self, query_text, project_id, sheet_number=None, limit=3):
@@ -332,22 +377,38 @@ class ConstructionGraph:
             logger.debug(f"Search results count | count={len(final)}")
             return final
    
-    def get_definition_by_id(self, detail_id, project_id):
-        query = """
-        MATCH (n:Definition)
-        WHERE n.id = $id AND n.project = $project_id
-        RETURN 
-            n.id as ID,
-            n.title as Title,
-            n.row as Rows,
-            n.columns as Columns,
-            n.bom as BOM,
-            n.fabrication as fabrication
-        LIMIT 1
-        """
+    def get_definition_by_id(self, detail_id, project_id,sheet_number=None):
+
+        if sheet_number:
+            query = """
+            MATCH (n:Definition)-[:FOUND_ON]->(p:Sheet)
+            WHERE n.id = $id AND n.project = $project_id
+            AND p.sheet_number = $sheet_number
+            RETURN 
+                n.id as ID,
+                n.title as Title,
+                n.row as Rows,
+                n.columns as Columns,
+                n.bom as BOM,
+                n.fabrication as fabrication
+            LIMIT 1
+            """
+        else:
+            query = """
+            MATCH (n:Definition)
+            WHERE n.id = $id AND n.project = $project_id
+            RETURN 
+                n.id as ID,
+                n.title as Title,
+                n.row as Rows,
+                n.columns as Columns,
+                n.bom as BOM,
+                n.fabrication as fabrication
+            LIMIT 1
+            """
 
         with self.driver.session() as session:
-            result = session.run(query, id=detail_id, project_id=project_id)
+            result = session.run(query, id=detail_id, project_id=project_id,sheet_number=sheet_number)
             record = result.single()
 
             if not record:

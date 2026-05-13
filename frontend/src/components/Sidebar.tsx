@@ -46,13 +46,15 @@ export function Sidebar({onNewEstimation, selectedProjectId, onSelectProject}: S
 
             es.onmessage = (event) => {
                 const data = JSON.parse(event.data);
+                const isFinalComplete = data.step === "agent_4_merger" && data.status === "completed";
+                const isFailed = data.status === "failed";
 
-                if (data.status === "completed") {
+                if (isFinalComplete || isFailed) {
                     // ✅ update that project only
                     setProjects(prev =>
                         prev.map(p =>
                             p.job_id === project.job_id
-                                ? {...p, status: "completed"}
+                                ? {...p, status: isFailed ? "failed" : "completed"}
                                 : p
                         )
                     );
@@ -145,7 +147,14 @@ export function Sidebar({onNewEstimation, selectedProjectId, onSelectProject}: S
             {/* New Estimation Button */}
             <div className="p-4 border-t border-sidebar-border">
                 <Button
-                    onClick={onNewEstimation}
+                    onClick={()=>{
+                        const activeJob = projects.find(p => p.status?.toLowerCase() === "processing");
+                        if (activeJob) {
+                            alert(`"${activeJob.name}" is still processing. Please wait for it to complete before starting a new estimation.`);
+                            return;
+                        }
+                        onNewEstimation();
+                    }}
                     className="w-full bg-accent hover:bg-accent/90 text-accent-foreground"
                 >
                     <Plus className="w-4 h-4 mr-2"/>
@@ -218,6 +227,8 @@ function ProjectItem({
                     className={
                         status === "completed"
                             ? "bg-emerald-500/20 text-emerald-400 text-xs"
+                            : status === "failed"
+                            ? "bg-red-500/20 text-red-400 text-xs"
                             : "bg-accent/20 text-accent text-xs"
                     }
                 >

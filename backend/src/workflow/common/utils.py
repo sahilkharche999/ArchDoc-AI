@@ -592,6 +592,18 @@ def _enrich_symbols(raw_symbols, project_id, sheet_number):
 
         if is_detail_ref(query_text):
             definition = graph_db.get_definition_by_id(query_text, project_id)
+
+        elif re.match(r"^(cir|hex)-(\d+)$", query_text, re.IGNORECASE):
+            m = re.match(r"^(cir|hex)-(\d+)$", query_text, re.IGNORECASE)
+            bare_number = m.group(2)
+            prefixed = query_text.upper()
+            logger.info(f"Using SCHEDULE LOOKUP for {query_text} → trying {prefixed} then {bare_number} on sheet {sheet_number}")
+            # Try prefixed first (keyed notes stored as "HEX-24")
+            definition = graph_db.get_definition_by_id(prefixed, project_id, sheet_number=sheet_number)
+            if not definition:
+                # Fallback to bare number (kettle cover stored as "24")
+                definition = graph_db.get_definition_by_id(bare_number, project_id, sheet_number=sheet_number)
+
         else:
             matches = graph_db.semantic_search(query_text, project_id, sheet_number=None, limit=1)
             if matches:

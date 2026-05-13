@@ -268,7 +268,7 @@ def prompt_for_node_process_plans():
     → Format as: "TRI-<number>"
 
   • No visible enclosing shape?
-    → Use raw text (e.g., "F5")
+    → Use raw text (e.g., "24", F5")
 
   CRITICAL:
   The shape is more important than the text alone.
@@ -1824,7 +1824,7 @@ def prompt_for_extract_single_detail(group_title: str, group_detail_id: str):
 #     """
 #     return prompt
 
-def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, sheet_number: str):
+def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, sheet_number: str,SHEET_DEFINITIONS: str = "[]"):
     """
     Accepts the list of dictionaries returned by Neo4j (graph_data).
     Each symbol dict contains:
@@ -1854,6 +1854,22 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, s
       These drive CASE C (beams), CASE D (columns), CASE E (lintels), and any
       material label that appears on the plan without a callout bubble.
 
+    SOURCE 3 — SHEET DEFINITIONS (schedules, notes, rules from this sheet):
+      All schedule tables and keyed notes extracted from this sheet and stored in the
+      knowledge graph. These define text marks you may see written directly on the plan
+      — marks like CW1, CW3, MW1, F11, MJ1 that are NOT inside callout bubbles.
+
+      When you see a text label on the plan (e.g. "CW1" on a wall, "MJ1" at a door jamb),
+      look it up in the SHEET DEFINITIONS below to find its specification.
+
+      Use this data to:
+      - Resolve wall marks (CW1 → 24" thick, 13'-0" height, #6 AT 6" O.C.)
+      - Resolve footing/note references (F11 → concrete lintel spec)
+      - Resolve any mark that matches a schedule row ID below
+
+      SHEET DEFINITIONS:
+      {SHEET_DEFINITIONS}
+
     You are EXECUTING STRUCTURAL ESTIMATION LOGIC across both sources
     to produce a complete Final Bill of Materials.
 
@@ -1879,6 +1895,9 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, s
     {valid_materials_str}
 
     CURRENT DRAWING SHEET: {sheet_number}
+
+    SHEET DEFINITIONS (schedules & notes for this sheet):
+    {SHEET_DEFINITIONS}
 
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     STEP 1 — INVENTORY EVERY SYMBOL ON THE PLAN
@@ -2275,6 +2294,10 @@ There are only two valid symbol types:
 1) HEXAGON with a number inside:
    Output exactly: hex-N
    Examples: hex-1, hex-42
+
+2) CIRCLE with a number inside:
+   Output exactly: cir-N
+   Examples: cir-1, cir-7
 
 2) DETAIL CALLOUT — circle on top of triangle with:
    - Top half: a number or alphanumeric label

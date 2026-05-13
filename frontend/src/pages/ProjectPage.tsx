@@ -56,22 +56,6 @@ export default function ProjectPage() {
     };
 
     fetchProject();
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects/${id}`);
-        const project = await res.json();
-        const s = project.status?.toLowerCase();
-        if (s === "failed") {
-          setStatus("failed");
-          clearInterval(interval);
-        }
-        if (s === "completed") {
-          clearInterval(interval);
-        }
-      } catch {}
-    }, 5000);
-
-    return () => clearInterval(interval);
   }, [id]);
 
   // loading state

@@ -56,6 +56,9 @@ def clean_output(text: str) -> str:
     text = re.sub(r'(?<=/)[5s](?=\d)', 'S', text, flags=re.IGNORECASE)
     # Valid patterns
     
+    if re.match(r"^cir-\d+$", text, re.IGNORECASE):
+        return text
+    
     if re.match(r"^hex-\d+$", text, re.IGNORECASE):
         return text
     

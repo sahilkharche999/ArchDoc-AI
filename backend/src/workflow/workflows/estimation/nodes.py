@@ -1,7 +1,7 @@
 import os
 import cv2
 import json
-import fitz
+import re
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
@@ -1091,6 +1091,20 @@ def node_agent_4_merger(state: ProjectState,config):
                     project_id
                 )
 
+            elif re.match(r"^(cir|hex)-(\d+)$", query_text, re.IGNORECASE):
+                m = re.match(r"^(cir|hex)-(\d+)$", query_text, re.IGNORECASE)
+                bare_number = m.group(2)
+                prefixed = query_text.upper()
+                logger.info(f"Using SCHEDULE LOOKUP for {query_text} → trying {prefixed} then {bare_number} on sheet {sheet_number}")
+                
+                # Try prefixed first (keyed notes stored as "HEX-24")
+                definition = graph_db.get_definition_by_id(prefixed, project_id, sheet_number=sheet_number)
+            
+                # Fallback to bare number (kettle cover stored as "24")
+                if not definition:
+                    definition = graph_db.get_definition_by_id(bare_number, project_id, sheet_number=sheet_number)
+
+
             else:
                 logger.info(f"Using SEMANTIC SEARCH for {query_text}")
 
@@ -1147,10 +1161,19 @@ def node_agent_4_merger(state: ProjectState,config):
             # Attach the fully enriched definition to the symbol
             sym['linked_definition'] = definition
             enriched_symbols.append(sym)
+            
         logger.debug(f"    > Enriched {len(enriched_symbols)} symbols with Graph Data.")
 
+        sheet_definitions = graph_db.get_all_definitions_for_sheet(project_id, sheet_number)
+        logger.debug(f"    > Fetched {len(sheet_definitions)} definitions for sheet {sheet_number}")
+
         # 3. ONE-SHOT PROMPT (No ReAct Loop needed anymore!
-        system_prompt =prompt_for_agent_4_merger(json.dumps(enriched_symbols, indent=2),valid_materials_str,sheet_number)
+        system_prompt =prompt_for_agent_4_merger(
+            json.dumps(enriched_symbols, indent=2),
+            valid_materials_str,
+            sheet_number,
+            json.dumps(sheet_definitions, indent=2)
+            )
 
         # 4. Call LLM (Standard Invoke)
         b64 = load_image_base64(img_path)

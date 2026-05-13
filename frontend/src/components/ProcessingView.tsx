@@ -144,9 +144,9 @@ export function ProcessingView({jobId, filePath, onComplete, onFailed}: Processi
      };
     es.onerror = (err) => {
         console.error("SSE error:", err);
-        setHasFailed(true);
-        es.close();
-        onFailed?.();
+        // setHasFailed(true);
+        // es.close();
+        // onFailed?.();
     }
 
     return () => {
@@ -613,12 +613,6 @@ export function ProcessingView({jobId, filePath, onComplete, onFailed}: Processi
                 <Card>
                     <CardContent className="p-6">
                         <h2 className="text-xl mb-6">Processing Drawings</h2>
-                        {activeStep === -1 && (
-                            <div className="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-500 text-sm">
-                                ⚠ Processing failed. Please delete this project and try again.
-                            </div>
-                        )}
-                         
                         <div className="space-y-4">
                             {steps.map((step, index) => (
                                 <ProcessingStep
