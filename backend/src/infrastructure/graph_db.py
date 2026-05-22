@@ -129,6 +129,9 @@ class ConstructionGraph:
             vector = self.embedder.embed_query(description)
             logger.debug(f"Vector generated | dim={len(vector)}")
 
+            # Unique ID = schedule name + symbol (prevents collision)
+            unique_id = f"{schedule_name}:{symbol}"
+
             # 3. Cypher Query
             query = """
             MERGE (proj:Project {id: $project_id})
@@ -137,8 +140,9 @@ class ConstructionGraph:
 
             MERGE (p)-[:BELONGS_TO]->(proj)
 
-            MERGE (d:Definition {id: $symbol, project: $project_id})
+            MERGE (d:Definition {id: $unique_id, project: $project_id})
             SET d:Schedule
+            SET d.symbol = $symbol
             SET d.schedule_name = $schedule_name
             SET d.name = $schedule_name
             SET d.columns = $columns
@@ -154,6 +158,7 @@ class ConstructionGraph:
                 session.run(
                     query,
                     project_id=project_id,
+                    unique_id=unique_id,
                     schedule_name=schedule_name,
                     symbol=symbol,
                     row_json=row_json,

@@ -14,17 +14,17 @@ from src.workflow.common.schemas import (
     DrawingTypeResponse,
     FinalEstimation,
     TextRulesExtraction,
-    IngestionOutput 
+    IngestionOutput,
+    BOMValidation
     )
 from src.workflow.workflows.estimation.prompt import (
     prompt_for_node_classify_pages,
     prompt_for_node_process_plans,
     prompt_node_process_text_rules,
     prompt_for_agent_4_merger,
-    prompt_for_extract_single_detail
+    prompt_bom_validator
     )
 from src.workflow.common.utils import (
-    crop_union_tables,
     map_page_layout,
     extract_single_detail,
     classify_image_as_plan,
@@ -377,6 +377,7 @@ def node_process_plans(state: ProjectState,config):
         "current_hitl_index": total_floor - remaining_floor + 1,
         "total_hitl_pages": total_floor,
         "remaining_after_this": remaining_floor - 1,
+        "plan_box_indices": None
     }
 
     resume_value = interrupt(review_data)
@@ -385,6 +386,10 @@ def node_process_plans(state: ProjectState,config):
     # corrected_bboxes = resume_value.get("corrected_bboxes", detected_bboxes) if resume_value else detected_bboxes
     state["remaining_pages"].pop(0) 
     corrected_bboxes = resume_value.get("corrected_bboxes", detected_bboxes)
+    plan_box_indices = resume_value.get("plan_box_indices", None) 
+    if isinstance(plan_box_indices, int):
+        plan_box_indices = [plan_box_indices]
+    plan_box_indices = set(plan_box_indices) if plan_box_indices else set()
     deleted_mineru_bboxes = resume_value.get("deleted_mineru_bboxes", []) 
     state["current_page"]["corrected_bboxes"] = corrected_bboxes
     state["current_page"]["status"] = "resumed"
@@ -493,13 +498,7 @@ def node_process_plans(state: ProjectState,config):
     else:
         active_json_path = json_path
     
-    # 4. Run Union Cropping (Title + Table Merge)
-    if os.path.exists(json_path):
-        logger.debug(f"   > Running Union Cropping...")
-        # This creates UNION crops in 'images_dir' and deletes old ones
-        crop_union_tables(active_json_path, page_img_path, output_dir=images_dir)
-    else:
-        logger.error(f"   ! MinerU JSON not found at {active_json_path}. Skipping Union Crop.")
+    # 4. Run map_page_layout 
     
     title_map = {} 
     if os.path.exists(active_json_path) and os.path.exists(page_pdf_path):
@@ -527,8 +526,16 @@ def node_process_plans(state: ProjectState,config):
         logger.debug(f"   > Found {len(image_files)} crops to analyze.")
 
         prompt =prompt_for_node_process_plans()
-        for img_file in image_files:
+        for i, img_file in enumerate(image_files):
             crop_path = os.path.join(images_dir, img_file)
+            if i in plan_box_indices:
+                logger.info(f"User-flagged plan: {img_file}")
+                floor_plan_images.append({
+                    "path": crop_path,
+                    "sheet": sheet_number,
+                    "title": "PLAN VIEW (user-flagged)"
+                })
+                continue
 
             matched_group = title_map.get(img_file)
             group_title = matched_group.title if matched_group else None
@@ -549,14 +556,14 @@ def node_process_plans(state: ProjectState,config):
                 result = llm_flash.with_structured_output(IngestionOutput).invoke([msg])
                 resolved_title = group_title or result.title or img_file
                 # CASE A: It is a Schedule/Note -> Store in Graph
-                if result.type == "Schedule":
-                    logger.debug(f"     > Ingested Schedule: {result.title}")
+                if result.type == "Schedule" or result.type == "Keyed_Notes":
+                    logger.debug(f"     > Ingested Schedule/Keyed_Notes: {result.title}")
                     rows = result.rows or []
                     logger.debug(f" > Found {len(rows)} rows.")
 
                     columns = result.columns or []
 
-                    for row in rows:
+                    for idx, row in enumerate(rows):
                         # row is already a dictionary
                         row_data = row
 
@@ -568,11 +575,9 @@ def node_process_plans(state: ProjectState,config):
                                 primary_key = primary_key.strip().replace("\n", "").replace("\r", "")
                                 primary_key = " ".join(primary_key.split())
 
-                        if not primary_key:
-                            primary_key = row_data.get("MARK") or row_data.get("KEY") or "UNKNOWN"
+                        if not primary_key or primary_key in ("•", "-", "*", "UNKNOWN"):
+                            primary_key = str(idx + 1)
 
-                        if primary_key == "UNKNOWN":
-                            logger.warning(f"     ! Could not determine primary key for row: {row_data}")
 
                         graph_db.add_schedule_rule(
                             project_id=config["configurable"]["thread_id"],
@@ -616,6 +621,16 @@ def node_process_plans(state: ProjectState,config):
                 
             except Exception as e:
                 logger.exception(f"     ! Failed to ingest {img_file}: {e}")
+
+    if not floor_plan_images:
+        logger.warning("No plan found — running classify_image_as_plan fallback")
+        for img_file in image_files:
+            crop_path = os.path.join(images_dir, img_file)
+            img_type = classify_image_as_plan(crop_path)
+            if img_type == "PLAN_VIEW":
+                floor_plan_images.append({"path": crop_path, "sheet": sheet_number, "title": "PLAN VIEW"})
+                break
+
     state["current_page"] = None
     return {
         "floor_plan_images": floor_plan_images, 
@@ -656,6 +671,7 @@ def node_process_details(state: ProjectState,config):
     detail_library = state.get("detail_library", {})
     temp_plan_like_details = state.get("temp_plan_like_details", [])
     temp_dependent_detail_images = state.get("temp_dependent_details", [])
+    sheet_number = ""
 
     assets_dir = os.getenv("ASSETS_DIR", "/data/assets")
     job_id = config["configurable"]["thread_id"]
@@ -666,253 +682,255 @@ def node_process_details(state: ProjectState,config):
         state["remaining_section_pages"] = [
             p for p, t in state["page_map"].items() if t == "section"
         ]
+    corrected_bboxes = None
+    if state["remaining_section_pages"]: 
 
-    page_num = state["remaining_section_pages"][0]
-    logger.debug(f"Processing Section Page {page_num}...")
+        page_num = state["remaining_section_pages"][0]
+        logger.debug(f"Processing Section Page {page_num}...")
 
-    page_img_path = f"{state['output_dir']}/section_page_{page_num}.png"
-    page_pdf_path = f"{state['output_dir']}/section_page_{page_num}.pdf"
-    mineru_base_dir = f"{state['output_dir']}/section_page_{page_num}/auto"
-    layout_pdf_path = f"{mineru_base_dir}/section_page_{page_num}_layout.pdf"
-    json_path = f"{mineru_base_dir}/section_page_{page_num}_content_list.json"
-    images_dir = f"{mineru_base_dir}/images"
-    
-    # 2. Extract Single Page PDF & Image
-    if not os.path.exists(page_img_path):
-        convert_specific_page_to_png(state["pdf_path"], page_num, page_img_path, dpi=300)
-    
-    try:
-        reader = PdfReader(state["pdf_path"])
-        writer = PdfWriter()
-        writer.add_page(reader.pages[page_num])
-        with open(page_pdf_path, "wb") as f: writer.write(f)
-    except Exception as e:
-        logger.error(f"PDF extraction failed: {e}")
+        page_img_path = f"{state['output_dir']}/section_page_{page_num}.png"
+        page_pdf_path = f"{state['output_dir']}/section_page_{page_num}.pdf"
+        mineru_base_dir = f"{state['output_dir']}/section_page_{page_num}/auto"
+        layout_pdf_path = f"{mineru_base_dir}/section_page_{page_num}_layout.pdf"
+        json_path = f"{mineru_base_dir}/section_page_{page_num}_content_list.json"
+        images_dir = f"{mineru_base_dir}/images"
         
+        # 2. Extract Single Page PDF & Image
+        if not os.path.exists(page_img_path):
+            convert_specific_page_to_png(state["pdf_path"], page_num, page_img_path, dpi=300)
+        
+        try:
+            reader = PdfReader(state["pdf_path"])
+            writer = PdfWriter()
+            writer.add_page(reader.pages[page_num])
+            with open(page_pdf_path, "wb") as f: writer.write(f)
+        except Exception as e:
+            logger.error(f"PDF extraction failed: {e}")
+            
 
-    # 3. Extract Sheet Number
-    sheet_prefix = state.get("sheet_prefix", "")
-    sheet_info = get_sheet_number(page_img_path,sheet_prefix=sheet_prefix)
-    sheet_number = sheet_info["normalized"]
-    logger.debug(f"   > Identified Sheet Number: {sheet_number}")
+        # 3. Extract Sheet Number
+        sheet_prefix = state.get("sheet_prefix", "")
+        sheet_info = get_sheet_number(page_img_path,sheet_prefix=sheet_prefix)
+        sheet_number = sheet_info["normalized"]
+        logger.debug(f"   > Identified Sheet Number: {sheet_number}")
 
-    # 4. Run MinerU
-    if not os.path.exists(json_path):
-        logger.debug(f"   > Running MinerU on Page {page_num}...")
-        minerU_pdf_creating_extration(page_pdf_path, state["output_dir"], "pipeline")
-    else:
-        logger.debug(f"   > MinerU output exists, skipping")
-    
-    img_orig      = cv2.imread(page_img_path)
-    img_annotated = img_orig.copy()
-    img_h, img_w  = img_orig.shape[:2]
-    detected_bboxes = []
-    scale_x = 1.0
-    scale_y = 1.0
-
-    if os.path.exists(json_path):
-        with open(json_path) as f:
-            mineru_data = json.load(f)
-        if isinstance(mineru_data, list) and len(mineru_data) > 0 and isinstance(mineru_data[0], list):
-                    elements = mineru_data[0]
+        # 4. Run MinerU
+        if not os.path.exists(json_path):
+            logger.debug(f"   > Running MinerU on Page {page_num}...")
+            minerU_pdf_creating_extration(page_pdf_path, state["output_dir"], "pipeline")
         else:
-            elements = mineru_data 
+            logger.debug(f"   > MinerU output exists, skipping")
+        
+        img_orig      = cv2.imread(page_img_path)
+        img_annotated = img_orig.copy()
+        img_h, img_w  = img_orig.shape[:2]
+        detected_bboxes = []
+        scale_x = 1.0
+        scale_y = 1.0
 
-        max_json_x, max_json_y = 0, 0
-        for ele in elements:
-            bbox = ele.get("bbox")
-            if bbox and len(bbox) == 4:
-                max_json_x = max(max_json_x, bbox[2])
-                max_json_y = max(max_json_y, bbox[3])
+        if os.path.exists(json_path):
+            with open(json_path) as f:
+                mineru_data = json.load(f)
+            if isinstance(mineru_data, list) and len(mineru_data) > 0 and isinstance(mineru_data[0], list):
+                        elements = mineru_data[0]
+            else:
+                elements = mineru_data 
 
-        scale_x = (img_w / max_json_x) if max_json_x > 0 else 1.0
-        scale_y = (img_h / max_json_y) if max_json_y > 0 else 1.0
-        for ele in elements:
-            if ele.get("content", {}).get("image_source") or ele.get("type") == "image":
+            max_json_x, max_json_y = 0, 0
+            for ele in elements:
                 bbox = ele.get("bbox")
                 if bbox and len(bbox) == 4:
-                    x1 = int(bbox[0] * scale_x)
-                    y1 = int(bbox[1] * scale_y)
-                    x2 = int(bbox[2] * scale_x)
-                    y2 = int(bbox[3] * scale_y)
-                    cv2.rectangle(img_annotated, (x1, y1), (x2, y2), (0, 255, 0), 3)
-                    detected_bboxes.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2})
+                    max_json_x = max(max_json_x, bbox[2])
+                    max_json_y = max(max_json_y, bbox[3])
 
-        annotated_filename = f"section_{page_num}_annotated.png"
-        cv2.imwrite(os.path.join(job_dir, annotated_filename), img_annotated)
-        cv2.imwrite(os.path.join(job_dir, f"section_{page_num}.png"), img_orig)
-        image_url = f"/api/v1/assets/{job_id}/{annotated_filename}"
+            scale_x = (img_w / max_json_x) if max_json_x > 0 else 1.0
+            scale_y = (img_h / max_json_y) if max_json_y > 0 else 1.0
+            for ele in elements:
+                if ele.get("content", {}).get("image_source") or ele.get("type") == "image":
+                    bbox = ele.get("bbox")
+                    if bbox and len(bbox) == 4:
+                        x1 = int(bbox[0] * scale_x)
+                        y1 = int(bbox[1] * scale_y)
+                        x2 = int(bbox[2] * scale_x)
+                        y2 = int(bbox[3] * scale_y)
+                        cv2.rectangle(img_annotated, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                        detected_bboxes.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2})
 
-        state["current_section_page"] = {
-        "page_num":       page_num,
-        "image_path":     page_img_path,
-        "pdf_path":       page_pdf_path,
-        "json_path":      json_path,
-        "layout_pdf_path": layout_pdf_path,
-        "sheet_number":   sheet_number,
-        "status": "waiting_for_hitl"
-    }
-        total_section = len([p for p, t in state["page_map"].items() if t == "section"])
-        remaining_section = len(state.get("remaining_section_pages", []))
-        review_data = {
-            "type": "section_review",
-            "image_path":   image_url,
-            "page_num":     page_num,
-            "bboxes":       detected_bboxes,
-            "image_width":  img_w,
-            "image_height": img_h,
-            "current_hitl_index": total_section - remaining_section + 1,
-            "total_hitl_pages": total_section,
-            "remaining_after_this": remaining_section - 1,
+            annotated_filename = f"section_{page_num}_annotated.png"
+            cv2.imwrite(os.path.join(job_dir, annotated_filename), img_annotated)
+            cv2.imwrite(os.path.join(job_dir, f"section_{page_num}.png"), img_orig)
+            image_url = f"/api/v1/assets/{job_id}/{annotated_filename}"
+
+            state["current_section_page"] = {
+            "page_num":       page_num,
+            "image_path":     page_img_path,
+            "pdf_path":       page_pdf_path,
+            "json_path":      json_path,
+            "layout_pdf_path": layout_pdf_path,
+            "sheet_number":   sheet_number,
+            "status": "waiting_for_hitl"
         }
-        resume_value = interrupt(review_data)
-        state["remaining_section_pages"].pop(0) 
-        corrected_bboxes = resume_value.get("corrected_bboxes", detected_bboxes) if resume_value else detected_bboxes
-        deleted_mineru_bboxes = resume_value.get("deleted_mineru_bboxes", []) 
-        state["current_section_page"]["corrected_bboxes"] = corrected_bboxes
-        state["current_section_page"]["status"] = "resumed"
-        logger.info(f"▶️ RESUMED | corrected_bboxes count={len(corrected_bboxes)}")
-    # else:
+            total_section = len([p for p, t in state["page_map"].items() if t == "section"])
+            remaining_section = len(state.get("remaining_section_pages", []))
+            review_data = {
+                "type": "section_review",
+                "image_path":   image_url,
+                "page_num":     page_num,
+                "bboxes":       detected_bboxes,
+                "image_width":  img_w,
+                "image_height": img_h,
+                "current_hitl_index": total_section - remaining_section + 1,
+                "total_hitl_pages": total_section,
+                "remaining_after_this": remaining_section - 1,
+            }
+            resume_value = interrupt(review_data)
+            state["remaining_section_pages"].pop(0) 
+            corrected_bboxes = resume_value.get("corrected_bboxes", detected_bboxes) if resume_value else detected_bboxes
+            deleted_mineru_bboxes = resume_value.get("deleted_mineru_bboxes", []) 
+            state["current_section_page"]["corrected_bboxes"] = corrected_bboxes
+            state["current_section_page"]["status"] = "resumed"
+            logger.info(f"▶️ RESUMED | corrected_bboxes count={len(corrected_bboxes)}")
+        # else:
 
-    #     corrected_bboxes = None
+        #     corrected_bboxes = None
 
-    # --- Save corrected crops (same as Agent 2) ---
-    if corrected_bboxes:
-        os.makedirs(images_dir, exist_ok=True)
+        # --- Save corrected crops (same as Agent 2) ---
+        if corrected_bboxes:
+            os.makedirs(images_dir, exist_ok=True)
 
-        for i, bbox in enumerate(corrected_bboxes):
-            x1, y1 = max(0, int(bbox["x1"])), max(0, int(bbox["y1"]))
-            x2, y2 = min(img_w, int(bbox["x2"])), min(img_h, int(bbox["y2"]))
-            if x2 <= x1 or y2 <= y1:
-                logger.warning(f"   ! Skipping invalid bbox {bbox}")
-                continue
-            crop = img_orig[y1:y2, x1:x2]
-            crop_filename = f"section_hitl_crop_{page_num}_{i}.png"
-            cv2.imwrite(os.path.join(images_dir, crop_filename), crop)
+            for i, bbox in enumerate(corrected_bboxes):
+                x1, y1 = max(0, int(bbox["x1"])), max(0, int(bbox["y1"]))
+                x2, y2 = min(img_w, int(bbox["x2"])), min(img_h, int(bbox["y2"]))
+                if x2 <= x1 or y2 <= y1:
+                    logger.warning(f"   ! Skipping invalid bbox {bbox}")
+                    continue
+                crop = img_orig[y1:y2, x1:x2]
+                crop_filename = f"section_hitl_crop_{page_num}_{i}.png"
+                cv2.imwrite(os.path.join(images_dir, crop_filename), crop)
 
-    if corrected_bboxes and os.path.exists(json_path):
-        with open(json_path, 'r') as f:
-            existing_json = json.load(f)        
-        if isinstance(existing_json, list) and len(existing_json) > 0 and isinstance(existing_json[0], list):
-            json_list = existing_json[0]
-        else:
-            json_list = existing_json
+        if corrected_bboxes and os.path.exists(json_path):
+            with open(json_path, 'r') as f:
+                existing_json = json.load(f)        
+            if isinstance(existing_json, list) and len(existing_json) > 0 and isinstance(existing_json[0], list):
+                json_list = existing_json[0]
+            else:
+                json_list = existing_json
 
-        for i, bbox in enumerate(corrected_bboxes):
-            crop_filename = f"section_hitl_crop_{page_num}_{i}.png"
-            crop_full_path = os.path.join(images_dir, crop_filename)
-            if os.path.exists(crop_full_path):
-                json_list.append({
-                    "type": "image",
-                    "img_path": f"images/{crop_filename}",
-                    "image_caption": [],
-                    "image_footnote": [],
-                    "bbox": [
-                        int(bbox["x1"] / scale_x),
-                        int(bbox["y1"] / scale_y),
-                        int(bbox["x2"] / scale_x),
-                        int(bbox["y2"] / scale_y)
-                    ],
-                    "page_idx": 0,
-                    "hitl": True
-                })
-        hitl_bboxes_mineru = [
-        [
-            int(bbox["x1"] / scale_x),
-            int(bbox["y1"] / scale_y),
-            int(bbox["x2"] / scale_x),
-            int(bbox["y2"] / scale_y)
-        ]
-        for bbox in corrected_bboxes
-        ]
-        deleted_bboxes_mineru = [
+            for i, bbox in enumerate(corrected_bboxes):
+                crop_filename = f"section_hitl_crop_{page_num}_{i}.png"
+                crop_full_path = os.path.join(images_dir, crop_filename)
+                if os.path.exists(crop_full_path):
+                    json_list.append({
+                        "type": "image",
+                        "img_path": f"images/{crop_filename}",
+                        "image_caption": [],
+                        "image_footnote": [],
+                        "bbox": [
+                            int(bbox["x1"] / scale_x),
+                            int(bbox["y1"] / scale_y),
+                            int(bbox["x2"] / scale_x),
+                            int(bbox["y2"] / scale_y)
+                        ],
+                        "page_idx": 0,
+                        "hitl": True
+                    })
+            hitl_bboxes_mineru = [
             [
                 int(bbox["x1"] / scale_x),
                 int(bbox["y1"] / scale_y),
                 int(bbox["x2"] / scale_x),
                 int(bbox["y2"] / scale_y)
             ]
-            for bbox in deleted_mineru_bboxes
-        ]
-        cleaned_json_list = []
-        for item in json_list:
-            if item.get("type") == "image" and not item.get("hitl"):
-                item_bbox = item.get("bbox", [0, 0, 0, 0])
-                explicitly_deleted = any(
-                    _bbox_overlap_ratio(item_bbox, dbox) > 0.3
-                    for dbox in deleted_bboxes_mineru
-                )
-                replaced_by_hitl = any(
-                    _bbox_overlap_ratio(item_bbox, hbox) > 0.3
-                    for hbox in hitl_bboxes_mineru
-                )
-                if explicitly_deleted or replaced_by_hitl:
-                    img_path_in_json = item.get("img_path", "")
-                    full_img_path = os.path.join(images_dir, os.path.basename(img_path_in_json))
-                    if os.path.exists(full_img_path):
-                        os.remove(full_img_path)
-                        reason = "explicitly deleted by user" if explicitly_deleted else "replaced by HITL crop"
-                        logger.debug(f"Removed MinerU image ({reason}): {full_img_path}")
+            for bbox in corrected_bboxes
+            ]
+            deleted_bboxes_mineru = [
+                [
+                    int(bbox["x1"] / scale_x),
+                    int(bbox["y1"] / scale_y),
+                    int(bbox["x2"] / scale_x),
+                    int(bbox["y2"] / scale_y)
+                ]
+                for bbox in deleted_mineru_bboxes
+            ]
+            cleaned_json_list = []
+            for item in json_list:
+                if item.get("type") == "image" and not item.get("hitl"):
+                    item_bbox = item.get("bbox", [0, 0, 0, 0])
+                    explicitly_deleted = any(
+                        _bbox_overlap_ratio(item_bbox, dbox) > 0.3
+                        for dbox in deleted_bboxes_mineru
+                    )
+                    replaced_by_hitl = any(
+                        _bbox_overlap_ratio(item_bbox, hbox) > 0.3
+                        for hbox in hitl_bboxes_mineru
+                    )
+                    if explicitly_deleted or replaced_by_hitl:
+                        img_path_in_json = item.get("img_path", "")
+                        full_img_path = os.path.join(images_dir, os.path.basename(img_path_in_json))
+                        if os.path.exists(full_img_path):
+                            os.remove(full_img_path)
+                            reason = "explicitly deleted by user" if explicitly_deleted else "replaced by HITL crop"
+                            logger.debug(f"Removed MinerU image ({reason}): {full_img_path}")
+                    else:
+                        cleaned_json_list.append(item)
                 else:
                     cleaned_json_list.append(item)
-            else:
-                cleaned_json_list.append(item)
-        json_list = cleaned_json_list
+            json_list = cleaned_json_list
 
-        hitl_json_path = json_path.replace("_content_list.json", "_content_list_hitl.json")
-        with open(hitl_json_path, 'w') as f:
-            json.dump(json_list, f)
-        active_json_path = hitl_json_path
-    else:
-        active_json_path = json_path        
-    
-    
-    
-     # --- map_page_layout + extract (for section pages) ---
-    if corrected_bboxes is not None:
-        if not os.path.exists(layout_pdf_path) or not os.path.exists(json_path):
-            logger.warning(f"MinerU output missing for page {page_num}.")
+            hitl_json_path = json_path.replace("_content_list.json", "_content_list_hitl.json")
+            with open(hitl_json_path, 'w') as f:
+                json.dump(json_list, f)
+            active_json_path = hitl_json_path
         else:
-            logger.debug("   > Running map_page_layout...")
-            detail_groups = map_page_layout(layout_pdf_path, active_json_path, images_dir)
-            for group in detail_groups:
-                original = group.detail_id
-                group.detail_id = normalize_detail_key(group.detail_id,sheet_number=sheet_number)
-                group.detail_id = normalize_detail_id(group.detail_id)
-                if group.detail_id != original:
-                    logger.warning(f"Normalized detail_id: {original} → {group.detail_id}")
-
-            if detail_groups:
-                logger.debug(f"   > Extracting {len(detail_groups)} details from section page...")
-                for group in detail_groups:
-                    logger.info(f"   > Extracting: {group.detail_id}")
-                    detail_data = extract_single_detail(
-                        group,
-                        images_dir,
-                        temp_plan_like_details,
-                        temp_dependent_detail_images,
-                        sheet_number,
-                        page_num
-                    )
-
-                    if detail_data:
-                        key = f"{group.detail_id}/{sheet_number}" if "/" not in group.detail_id else group.detail_id
-                        detail_library[key] = {
-                            "sheet": sheet_number,
-                            "page":  page_num,
-                            "data":  detail_data.model_dump()
-                        }
-                        detail_dict = detail_data.model_dump()
-                        graph_db.add_detail_bom(
-                            project_id=config["configurable"]["thread_id"],
-                            detail_key=key,
-                            title=detail_dict["title"],
-                            materials_list=detail_dict["materials"],
-                            fabrication=detail_dict["fabrication"],
-                            page_num=page_num,
-                            sheet_number=sheet_number
-                        )
+            active_json_path = json_path        
         
+        
+        
+        # --- map_page_layout + extract (for section pages) ---
+        if corrected_bboxes is not None:
+            if not os.path.exists(layout_pdf_path) or not os.path.exists(json_path):
+                logger.warning(f"MinerU output missing for page {page_num}.")
+            else:
+                logger.debug("   > Running map_page_layout...")
+                detail_groups = map_page_layout(layout_pdf_path, active_json_path, images_dir)
+                for group in detail_groups:
+                    original = group.detail_id
+                    group.detail_id = normalize_detail_key(group.detail_id,sheet_number=sheet_number)
+                    group.detail_id = normalize_detail_id(group.detail_id)
+                    if group.detail_id != original:
+                        logger.warning(f"Normalized detail_id: {original} → {group.detail_id}")
+
+                if detail_groups:
+                    logger.debug(f"   > Extracting {len(detail_groups)} details from section page...")
+                    for group in detail_groups:
+                        logger.info(f"   > Extracting: {group.detail_id}")
+                        detail_data = extract_single_detail(
+                            group,
+                            images_dir,
+                            temp_plan_like_details,
+                            temp_dependent_detail_images,
+                            sheet_number,
+                            page_num
+                        )
+
+                        if detail_data:
+                            key = f"{group.detail_id}/{sheet_number}" if "/" not in group.detail_id else group.detail_id
+                            detail_library[key] = {
+                                "sheet": sheet_number,
+                                "page":  page_num,
+                                "data":  detail_data.model_dump()
+                            }
+                            detail_dict = detail_data.model_dump()
+                            graph_db.add_detail_bom(
+                                project_id=config["configurable"]["thread_id"],
+                                detail_key=key,
+                                title=detail_dict["title"],
+                                materials_list=detail_dict["materials"],
+                                fabrication=detail_dict["fabrication"],
+                                page_num=page_num,
+                                sheet_number=sheet_number
+                            )
+            
     remaining = state.get("remaining_section_pages", [])
     is_last_section_page = len(remaining) == 0
     if is_last_section_page:
@@ -1017,7 +1035,7 @@ def node_agent_4_merger(state: ProjectState,config):
     `floor_plan_images` and performs the following sequence:
 
     1. Run DINOv2-based object detection on the floor plan to locate symbols.
-    2. Crop each detected symbol region and send the crop to Groq for OCR/
+    2. Crop each detected symbol region and send the crop to gemini for OCR/
        recognition, obtaining a textual symbol identifier.
     3. Use the recognized symbol text to perform a semantic search against the
        Neo4j database, retrieving any associated rule or detail definition.
@@ -1047,6 +1065,8 @@ def node_agent_4_merger(state: ProjectState,config):
     valid_materials_str = json.dumps(valid_materials)
 
     if not floor_images:
+        logger.error("No floor plans found — marking job as failed")
+        update_job_progress(project_id, "failed", "agent_4_merger")
         return {"final_bill_of_materials": {"error": "No floor plans found."}}
 
     all_extracted_items = []
@@ -1100,7 +1120,7 @@ def node_agent_4_merger(state: ProjectState,config):
                 # Try prefixed first (keyed notes stored as "HEX-24")
                 definition = graph_db.get_definition_by_id(prefixed, project_id, sheet_number=sheet_number)
             
-                # Fallback to bare number (kettle cover stored as "24")
+                # Fallback to bare number (kettlex cover stored as "24")
                 if not definition:
                     definition = graph_db.get_definition_by_id(bare_number, project_id, sheet_number=sheet_number)
 
@@ -1194,9 +1214,6 @@ def node_agent_4_merger(state: ProjectState,config):
             
             failed=True
     enriched = []
-    if all_extracted_items:
-        bom_dicts = [item.model_dump() for item in all_extracted_items]
-        enriched = enrich_bom_with_pricing(bom_dicts, material_lookup)
     valid_set = {m.upper().strip() for m in valid_materials}
 
     filtered = []
@@ -1219,6 +1236,48 @@ def node_agent_4_merger(state: ProjectState,config):
 
     all_extracted_items = filtered
 
+    # ── BOM VALIDATION / DEDUP (lightweight LLM pass) 
+    if all_extracted_items:
+        try:
+            bom_for_validation = [
+                {
+                    "index": i,
+                    "description": item.description,
+                    "material_size": item.material_size,
+                    "quantity": item.quantity,
+                    "source_symbol": item.source_symbol,
+                    "logic_trace": item.logic_trace[:120]  # truncate for token efficiency
+                }
+                for i, item in enumerate(all_extracted_items)
+            ]
+
+            val_msg = HumanMessage(content=prompt_bom_validator(
+                json.dumps(bom_for_validation, indent=2)
+            ))
+            validation = llm_flash.with_structured_output(BOMValidation).invoke([val_msg])
+
+            drop_indices = {
+                v.index for v in validation.validated_items
+                if v.action == "drop"
+            }
+
+            before = len(all_extracted_items)
+            all_extracted_items = [
+                item for i, item in enumerate(all_extracted_items)
+                if i not in drop_indices
+            ]
+            logger.info(
+                f"BOM validation: kept {len(all_extracted_items)}/{before} items "
+                f"(dropped {before - len(all_extracted_items)})"
+            )
+            for v in validation.validated_items:
+                if v.action == "drop":
+                    logger.info(f"  DROP [{v.index}]: {v.reason}")
+
+        except Exception as e:
+            logger.warning(f"BOM validation failed — using unvalidated BOM | error={e}")
+    
+
     
 
     if failed :
@@ -1232,6 +1291,10 @@ def node_agent_4_merger(state: ProjectState,config):
         PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, "../../../"))
         base_path = os.getenv("BOM_STORAGE_PATH",  os.path.join(PROJECT_ROOT, "bom_storage"))
         os.makedirs(base_path, exist_ok=True)
+        enriched = enrich_bom_with_pricing(
+            [item.model_dump() for item in all_extracted_items],
+            material_lookup
+        )
         file_path = os.path.join(base_path, f"{job_id}.json")
         data = {
             "job_id": job_id,
@@ -1246,4 +1309,8 @@ def node_agent_4_merger(state: ProjectState,config):
 
 
     return {"final_bill_of_materials": {"final_bill_of_materials": enriched}}   
+
+
+
+
 

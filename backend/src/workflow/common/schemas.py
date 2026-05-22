@@ -183,3 +183,11 @@ class DetailGroup(BaseModel):
 
 class DetailMap(BaseModel):
     groups: List[DetailGroup]
+
+class BOMValidationItem(BaseModel):
+    index: int = Field(description="Index of the item in the input list (0-based)")
+    action: Literal["keep", "drop"] = Field(description="keep or drop this item")
+    reason: str = Field(description="Why keeping or dropping")
+
+class BOMValidation(BaseModel):
+    validated_items: List[BOMValidationItem]

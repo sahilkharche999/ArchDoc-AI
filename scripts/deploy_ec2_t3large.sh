@@ -334,19 +334,85 @@ systemctl restart nginx
 echo "      Nginx configured and restarted."
 
 # -----------------------------------------------------------------------------
-# 8. Health checks
+# 8. Watchdog (healthcheck.sh + cron)
 # -----------------------------------------------------------------------------
 echo ""
-echo "[8/8] Running health checks..."
-sleep 5
+echo "[8/9] Setting up watchdog..."
+ 
+cat > /opt/dax/healthcheck.sh <<'WATCHDOG'
+#!/bin/bash
+ 
+LOG=/var/log/dax/watchdog.log
+TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+ 
+# ── Step 1: Check each Docker dependency ─────────────────────────────────────
+RESTARTED_CONTAINER=false
+ 
+for CONTAINER in postgres_db dax-redis dax-memgraph; do
+    RUNNING=$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null || echo "false")
+ 
+    if [ "$RUNNING" != "true" ]; then
+        echo "$TIMESTAMP | CONTAINER DOWN | $CONTAINER | restarting..." >> $LOG
+        docker start "$CONTAINER"
+        RESTARTED_CONTAINER=true
+    fi
+done
+ 
+# If any container was restarted, wait for it to fully boot
+# before checking the backend
+if [ "$RESTARTED_CONTAINER" = true ]; then
+    echo "$TIMESTAMP | Waiting 10s for containers to boot..." >> $LOG
+    sleep 10
+fi
+ 
+# ── Step 2: Check backend health ─────────────────────────────────────────────
+HEALTH=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 http://127.0.0.1:8000/health)
+ 
+if [ "$HEALTH" != "200" ]; then
+    echo "$TIMESTAMP | BACKEND FAILED | HTTP $HEALTH | restarting dax-backend..." >> $LOG
+    systemctl restart dax-backend
+else
+    echo "$TIMESTAMP | OK | HTTP $HEALTH" >> $LOG
+fi
+WATCHDOG
+ 
+chmod +x /opt/dax/healthcheck.sh
+ 
+# Drop cron job — runs every minute as root
+cat > /etc/cron.d/dax-watchdog <<'CRONCONF'
+* * * * * root /opt/dax/healthcheck.sh
+CRONCONF
+ 
+echo "      Watchdog script created at /opt/dax/healthcheck.sh"
+echo "      Cron job created at /etc/cron.d/dax-watchdog"
+ 
+# Log rotation — weekly, keep 4 weeks
+cat > /etc/logrotate.d/dax-watchdog <<'LOGROTATE'
+/var/log/dax/watchdog.log {
+    weekly
+    rotate 4
+    compress
+    missingok
+    notifempty
+}
+LOGROTATE
+ 
+echo "      Log rotation configured at /etc/logrotate.d/dax-watchdog"
 
+# -----------------------------------------------------------------------------
+# 9. Health checks
+# -----------------------------------------------------------------------------
+echo ""
+echo "[9/9] Running health checks..."
+sleep 5
+ 
 BACKEND_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health || echo "000")
 NGINX_STATUS=$(systemctl is-active nginx || echo "inactive")
 BACKEND_STATUS=$(systemctl is-active dax-backend || echo "inactive")
 POSTGRES_STATUS=$(docker ps --filter "name=postgres_db" --format '{{.Status}}' 2>/dev/null || echo "not running")
 MEMGRAPH_STATUS=$(docker ps --filter "name=dax-memgraph" --format '{{.Status}}' 2>/dev/null || echo "not running")
 REDIS_STATUS=$(docker ps --filter "name=dax-redis" --format '{{.Status}}' 2>/dev/null || echo "not running")
-
+ 
 echo ""
 echo "============================================="
 echo " Deployment Summary"
@@ -357,18 +423,19 @@ echo "  Postgres:  $POSTGRES_STATUS"
 echo "  Memgraph:  $MEMGRAPH_STATUS"
 echo "  Redis:     $REDIS_STATUS"
 echo "============================================="
-
+ 
 if [[ "$BACKEND_HEALTH" != "200" ]]; then
   echo ""
   echo "WARNING: Backend health check failed. Check logs with:"
   echo "  sudo journalctl -u dax-backend -n 50"
 fi
-
+ 
 echo ""
 echo "Done. App available at http://$(curl -s ifconfig.me 2>/dev/null || echo '<EC2-PUBLIC-IP>')"
 echo ""
 echo "Useful commands:"
-echo "  sudo journalctl -u dax-backend -f          # tail backend logs"
-echo "  sudo systemctl restart dax-backend          # restart backend"
-echo "  docker ps                                   # check DB containers"
-echo "  sudo tail -f /var/log/dax/dax-\$(date +%F).log  # app log"
+echo "  sudo journalctl -u dax-backend -f                  # tail backend logs"
+echo "  sudo systemctl restart dax-backend                  # restart backend"
+echo "  docker ps                                           # check DB containers"
+echo "  sudo tail -f /var/log/dax/dax-\$(date +%F).log      # app log"
+echo "  sudo tail -f /var/log/dax/watchdog.log              # watchdog log"

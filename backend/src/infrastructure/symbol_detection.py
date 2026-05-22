@@ -120,18 +120,31 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
         target_sizes=[image.size[::-1]]
     )[0]
 
+    scored=sorted(
+        zip(results["scores"],results["labels"], results["boxes"]),
+        key=lambda x:x[0].item(),
+        reverse=True
+    )
+    kept_boxes=[]
+    for score,label,box in scored:
+        coords=list(map(int,box.tolist()))
+        if any(_boxes_overlap(coords,kept[2],threshold=0.4)for kept in kept_boxes):
+            logger.debug(f"Pre-OCR dedup: dropped score={score:.2f} bbox={coords}")
+            continue
+        kept_boxes.append((score.item(), label, coords))
+    logger.info(f"Pre-OCR dedup | raw={len(scored)} → kept={len(kept_boxes)}")
+
+
     detected_symbols = []
     os.makedirs(output_dir, exist_ok=True)
 
     # 2. Process Detections
-    for i, (score, label, box) in enumerate(zip(results["scores"], results["labels"], results["boxes"])):
-        if score.item() < 0.15: continue
-        logger.debug(
-            f"Detection accepted | index={i} | label={label} | score={score.item():.2f}"
-        )
+    for i, (score, label, coords) in enumerate(kept_boxes):
+        if score < 0.15: continue
+        logger.debug(f"Detection accepted | index={i} | label={label} | score={score:.2f}")
 
         # Get Coords
-        x1, y1, x2, y2 = map(int, box.tolist())
+        x1, y1, x2, y2 = coords
         img_area = image.width * image.height
         bbox_area = (x2 - x1) * (y2 - y1)
         if bbox_area > 0.5 * img_area:

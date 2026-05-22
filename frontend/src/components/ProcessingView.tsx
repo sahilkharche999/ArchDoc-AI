@@ -41,6 +41,8 @@ export function ProcessingView({jobId, filePath, onComplete, onFailed}: Processi
     const eventSourceRef = useRef<EventSource | null>(null);
     const [activeStep, setActiveStep] = useState<number>(0);
     const [hasFailed, setHasFailed] = useState(false);
+    const [planBoxIndices, setPlanBoxIndices] = useState<Set<number>>(new Set());
+    const [planRedBoxIndex, setPlanRedBoxIndex] = useState<number | null>(null);
 
 
     
@@ -170,7 +172,7 @@ export function ProcessingView({jobId, filePath, onComplete, onFailed}: Processi
 
   useEffect(() => {
     redrawCanvas();
-  }, [bboxes,hitlData, deletedMineruIndices]);
+  }, [bboxes,hitlData, deletedMineruIndices,planBoxIndices, planRedBoxIndex]);
 
   useEffect(() => {
     if (!jobId) return;
@@ -250,6 +252,15 @@ export function ProcessingView({jobId, filePath, onComplete, onFailed}: Processi
                 ctx.textAlign = "center";
                 ctx.textBaseline = "middle";
                 ctx.fillText("×", btnX + btnSize / 2, btnY + btnSize / 2);
+
+                // P button — always visible top-left, blue when flagged, grey when not
+                ctx.fillStyle = planBoxIndices.has(idx) ? "#3b82f6" : "#6b7280";
+                ctx.fillRect(b.x1, b.y1, btnSize, btnSize);
+                ctx.fillStyle = "white";
+                ctx.font = `bold ${btnSize * 0.75}px sans-serif`;
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText("P", b.x1 + btnSize / 2, b.y1 + btnSize / 2);
             }
         }
         const displayScale = canvas.width / (canvas.getBoundingClientRect().width || canvas.width);
@@ -259,13 +270,16 @@ export function ProcessingView({jobId, filePath, onComplete, onFailed}: Processi
         ctx.strokeStyle = "#ef4444";
         ctx.lineWidth   = 2;
         ctx.fillStyle   = "rgba(239,68,68,0.1)";
-        for (const box of bboxes) {
+        for (let ridx = 0; ridx < bboxes.length; ridx++) {
+            const box = bboxes[ridx];
+            ctx.strokeStyle = "#ef4444";
+            ctx.lineWidth   = 2;
+            ctx.fillStyle   = "rgba(239,68,68,0.1)";
             ctx.strokeRect(box.x, box.y, box.width, box.height);
             ctx.fillRect  (box.x, box.y, box.width, box.height);
 
             const btnX = box.x + box.width - btnSize;
             const btnY = box.y;
-
             ctx.fillStyle = "#ef4444";
             ctx.fillRect(btnX, btnY, btnSize, btnSize);
             ctx.fillStyle = "white";
@@ -273,6 +287,12 @@ export function ProcessingView({jobId, filePath, onComplete, onFailed}: Processi
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
             ctx.fillText("X", btnX + btnSize / 2, btnY + btnSize / 2);
+
+            // P button top-left on red boxes
+            ctx.fillStyle = planRedBoxIndex === ridx ? "#3b82f6" : "#6b7280";
+            ctx.fillRect(box.x, box.y, btnSize, btnSize);
+            ctx.fillStyle = "white";
+            ctx.fillText("P", box.x + btnSize / 2, box.y + btnSize / 2);
 
             ctx.strokeStyle = "#ef4444";
             ctx.fillStyle = "rgba(239,68,68,0.1)";
@@ -320,44 +340,72 @@ export function ProcessingView({jobId, filePath, onComplete, onFailed}: Processi
         }
     }
 
-    function handleCanvasClick(e: React.MouseEvent<HTMLCanvasElement>) {
-    // Only handle clicks, not drag-ends (drawingRef is already reset by mouseUp)
-    const pos = getRelativePos(e);
-    // Convert display pos back to image coords
-    const imgPos = toImageCoords(pos.x, pos.y);
 
+function handleCanvasClick(e: React.MouseEvent<HTMLCanvasElement>) {
+    const pos = getRelativePos(e);
+    const imgPos = toImageCoords(pos.x, pos.y);
     const canvas = canvasRef.current!;
     const displayScale = canvas.width / (canvas.getBoundingClientRect().width || canvas.width);
-    const btnSize = Math.max(30, 20 * displayScale);  
+    const btnSize = Math.max(60, 40 * displayScale);
 
+    // ── RED BOX P BUTTON FIRST (before green, so large red boxes aren't blocked) ──
+    for (let ridx = 0; ridx < bboxes.length; ridx++) {
+        const box = bboxes[ridx];
+        if (imgPos.x >= box.x && imgPos.x <= box.x + btnSize &&
+            imgPos.y >= box.y && imgPos.y <= box.y + btnSize) {
+            setPlanRedBoxIndex(prev => (prev === ridx ? null : ridx));
+            setPlanBoxIndices(new Set());
+            return;
+        }
+    }
+
+    // ── RED BOX X BUTTON ──
+    const indexToDelete = bboxes.findIndex(box => {
+        const btnX = box.x + box.width - btnSize;
+        const btnY = box.y;
+        return imgPos.x >= btnX && imgPos.x <= btnX + btnSize &&
+               imgPos.y >= btnY && imgPos.y <= btnY + btnSize;
+    });
+    if (indexToDelete !== -1) {
+        if (planRedBoxIndex === indexToDelete) setPlanRedBoxIndex(null);
+        setBboxes(prev => prev.filter((_, i) => i !== indexToDelete));
+        return;
+    }
+
+    // ── GREEN BOX BUTTONS (P and X) ──
     if (hitlData?.bboxes?.length) {
         for (let idx = 0; idx < hitlData.bboxes.length; idx++) {
             if (deletedMineruIndices.has(idx)) continue;
             const b = hitlData.bboxes[idx];
+            const pX = b.x1;
+            const pY = b.y1;
+            if (imgPos.x >= pX && imgPos.x <= pX + btnSize &&
+                imgPos.y >= pY && imgPos.y <= pY + btnSize) {
+                setPlanBoxIndices(prev => {
+                    const next = new Set(prev);
+                    next.has(idx) ? next.delete(idx) : next.add(idx);
+                    return next;
+                });
+                if (planRedBoxIndex !== null) setPlanRedBoxIndex(null);
+                return;
+            }
             const btnX = b.x1 + (b.x2 - b.x1) - btnSize;
             const btnY = b.y1;
             if (imgPos.x >= btnX && imgPos.x <= btnX + btnSize &&
                 imgPos.y >= btnY && imgPos.y <= btnY + btnSize) {
                 setDeletedMineruIndices(prev => new Set([...prev, idx]));
+               if (planBoxIndices.has(idx)) {
+                    setPlanBoxIndices(prev => {
+                        const next = new Set(prev);
+                        next.delete(idx);
+                        return next;
+                    });
+                }
                 return;
             }
         }
     }
-
-    const indexToDelete = bboxes.findIndex(box => {
-        const btnX = box.x + box.width - btnSize;
-        const btnY = box.y;
-        return (
-            imgPos.x >= btnX && imgPos.x <= btnX + btnSize &&
-            imgPos.y >= btnY && imgPos.y <= btnY + btnSize
-        );
-    });
-
-    if (indexToDelete !== -1) {
-        setBboxes(prev => prev.filter((_, i) => i !== indexToDelete));
-    }
 }
-
     function handleImageLoad() {
         const canvas = canvasRef.current;
         const img    = imgRef.current;
@@ -390,7 +438,28 @@ export function ProcessingView({jobId, filePath, onComplete, onFailed}: Processi
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                 corrected_bboxes: [...survivingMineruBoxes.map(b => ({x1:b.x1,y1:b.y1,x2:b.x2,y2:b.y2})), ...toBackendBboxes()],
-                deleted_mineru_bboxes: Array.from(deletedMineruIndices).map(idx => hitlData.bboxes[idx])
+                deleted_mineru_bboxes: Array.from(deletedMineruIndices).map(idx => hitlData.bboxes[idx]),
+                plan_box_indices: (() => {
+                const indices: number[] = [];
+                // surviving green boxes
+                (hitlData?.bboxes ?? []).forEach((_: any, i: number) => {
+                    if (!deletedMineruIndices.has(i) && planBoxIndices.has(i)) {
+                        let pos = 0;
+                        for (let j = 0; j < i; j++) {
+                            if (!deletedMineruIndices.has(j)) pos++;
+                        }
+                        indices.push(pos);
+                    }
+                });
+                // red boxes
+                if (planRedBoxIndex !== null) {
+                    const survivingGreenCount = (hitlData?.bboxes ?? [])
+                        .filter((_: any, i: number) => !deletedMineruIndices.has(i)).length;
+                    indices.push(survivingGreenCount + planRedBoxIndex);
+                }
+                return indices.length > 0 ? indices : null;
+                })()
+
             }),
                 
             });
@@ -401,6 +470,8 @@ export function ProcessingView({jobId, filePath, onComplete, onFailed}: Processi
         } finally {
             setIsSubmitting(false);
             setDeletedMineruIndices(new Set());
+            setPlanRedBoxIndex(null);
+            setPlanBoxIndices(new Set());
         }
     }
  

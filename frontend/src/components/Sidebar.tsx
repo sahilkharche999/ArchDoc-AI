@@ -74,7 +74,20 @@ export function Sidebar({onNewEstimation, selectedProjectId, onSelectProject}: S
             sources.forEach(s => s.close());
         };
     }, [projects]);
-
+    
+    // Re-fetch when user returns to this tab — catches jobs that completed elsewhere
+    useEffect(() => {
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === "visible") {
+                fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects/`)
+                    .then(r => r.json())
+                    .then(data => setProjects(data.projects || []))
+                    .catch(() => {});
+            }
+        };
+        document.addEventListener("visibilitychange", handleVisibilityChange);
+        return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+    }, []);
 
     const renameProject = async (jobId: string, newName: string) => {
         try {

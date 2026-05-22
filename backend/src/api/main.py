@@ -1,10 +1,12 @@
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import os
 from src.api.routes import upload, jobs, projects
 from src.db.init_jobs_table import init_jobs_table
 from src.db.init_job_progress_table import init_job_progress_table
+from src.db.connection import get_conn,release_conn
 from src.logger import setup_logger
 from dotenv import load_dotenv
 from src.redis_conn import connect_redis
@@ -61,4 +63,48 @@ app.include_router(pdf_fixes.router, prefix="/api/v1")
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "DAX API"}
+    checks={}
+    overall="ok"
+
+    #Check Redis 
+    redis_client=connect_redis()
+    try:
+        redis_client.ping()
+        checks["radis"]="ok"
+    except Exception as e:
+        checks['radis']=f'faild with exception :{str(e)}'
+        overall="degraded"
+
+    # Check Postgres
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.close()
+        release_conn(conn)
+        checks["postgres"] = "ok"
+    except Exception as e:
+        checks["postgres"] = f"failed: {str(e)}"
+        overall = "degraded"
+
+    # Check memegraph 
+
+    try:
+        from src.infrastructure.graph_db import graph_db
+        with graph_db.driver.session() as s:
+            s.run("RETURN 1")
+        checks["memgraph"] = "ok"
+    except Exception as e:
+        checks["memgraph"] = f"failed: {str(e)}"
+        overall = "degraded"
+
+    status_code=200 if overall == "ok" else 503
+
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "status": overall,
+            "service": "DAX API",
+            "checks": checks
+        }
+    )
