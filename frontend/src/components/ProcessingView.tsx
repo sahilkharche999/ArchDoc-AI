@@ -16,7 +16,7 @@ interface ProcessingViewProps {
 
 const steps = [
     {label: "Pages Classified"},              // classify
-    // {label: "Text Rules Processed"},          // process_text
+    {label: "Text Rules Processed"},          // process_text
     {label: "Floor Plans Identified"},        // process_plans
     {label: "Details Extracted"},             // process_details
     {label: "Bill of Materials Generated"}    // agent_4_merger
@@ -55,10 +55,10 @@ export function ProcessingView({jobId, filePath, onComplete, onFailed}: Processi
     const es = new EventSource(`${import.meta.env.VITE_API_URL}/api/v1/jobs/${jobId}/stream`);
     const nodeMap: Record<string, number> = {
             classify: 0,
-            // process_text: 1,
-            process_plans: 1,
-            process_details: 2,
-            agent_4_merger: 3
+            process_text: 1,
+            process_plans: 2,
+            process_details: 3,
+            agent_4_merger: 4
         };
     eventSourceRef.current = es;
     es.onmessage = async (event) => { 

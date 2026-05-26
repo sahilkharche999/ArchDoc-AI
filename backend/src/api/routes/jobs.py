@@ -51,7 +51,7 @@ def event_generator(job_id:str):
             status = progress[1]
             
             # Step order — send all previous steps as completed first
-            step_order = ["classify", "process_plans", "process_details", "agent_4_merger"]
+            step_order = ["classify","process_text", "process_plans", "process_details", "agent_4_merger"]
             
             if current_step in step_order and status == "processing":
                 idx = step_order.index(current_step)
@@ -252,7 +252,7 @@ def submit_hitl(job_id: str, payload: dict):
 
         # Decide UI step based on which HITL we just left
         if hitl_type == "classify_review":
-            next_ui_step = "process_plans"
+            next_ui_step = "process_text"
         elif hitl_type == "bbox_review":
             next_ui_step = "process_plans" if remaining_after_this > 0 else "process_details"
         elif hitl_type == "section_review":
@@ -262,7 +262,7 @@ def submit_hitl(job_id: str, payload: dict):
 
         # Mark previous step as done in DB and tell frontend
         if next_ui_step:
-            step_order = ["classify", "process_plans", "process_details", "agent_4_merger"]
+            step_order = ["classify","process_text", "process_plans", "process_details", "agent_4_merger"]
             idx = step_order.index(next_ui_step)
             # Mark all previous as completed
             for prev in step_order[:idx]:
@@ -322,15 +322,15 @@ def submit_hitl(job_id: str, payload: dict):
                     if node_name == "process_details" and isinstance(state_update, dict):
                         remaining = state_update.get("remaining_section_pages", [])
                         if len(remaining) == 0:
-                            step_order = ["classify", "process_plans", "process_details", "agent_4_merger"]
-                            for prev in step_order[:3]:
+                            step_order = ["classify","process_text", "process_plans", "process_details", "agent_4_merger"]
+                            for prev in step_order[:4]:
                                 redis_conn.redis_client.publish(job_id, dumps({"step": prev, "status": "completed"}))
                             update_job_progress(job_id, "processing", "agent_4_merger")
                             redis_conn.redis_client.publish(job_id, dumps({"step": "agent_4_merger", "status": "processing"}))
                     
                     if node_name == "agent_4_merger":
-                        step_order = ["classify", "process_plans", "process_details", "agent_4_merger"]
-                        for prev in step_order[:3]:
+                        step_order = ["classify","process_text", "process_plans", "process_details", "agent_4_merger"]
+                        for prev in step_order[:4]:
                             redis_conn.redis_client.publish(job_id, dumps({"step": prev, "status": "completed"}))
                         update_job_progress(job_id, "processing", "agent_4_merger")
                         redis_conn.redis_client.publish(job_id, dumps({"step": "agent_4_merger", "status": "processing"}))

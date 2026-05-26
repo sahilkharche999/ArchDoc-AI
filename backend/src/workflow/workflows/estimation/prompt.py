@@ -15,39 +15,37 @@ def prompt_for_node_classify_pages():
     return prompt
 
 # ------ AGENT 1. PROCESS TEXT  ---------
-def prompt_node_process_text_rules(markdown_content:str):
-    prompt = f"""
-        You are a Structural Engineer analyzing the "General Notes" and "Schedules" of a construction project.
-        The input below is a Markdown file extracted from the PDF.
+def prompt_node_process_text_rules(markdown_content: str):
+    return f"""
+You are a Structural Engineer reviewing construction specification notes for a steel fabrication estimator.
 
-        ### YOUR GOAL
-        Extract structured **Rules** and **Protocols** that will guide the estimation process.
+### INPUT:
+{markdown_content}
 
-        ### INPUT MARKDOWN:
-        {markdown_content}
+### YOUR GOAL
+Extract any information that would help a steel estimator understand:
+- What materials are required and to what standard
+- What dimensions, strengths, or grades apply
+- Any rules that affect how much material is needed or how it is fabricated
 
-        ### INSTRUCTIONS:
+### KEEP anything related to:
+- Steel members, grades, standards (structural steel, rebar, bolts, welds, anchor bolts)
+- Concrete specs that affect steel embedment or anchorage
+- Wood or other materials if they interact with steel connections
+- Load values, spans, or spacing rules that affect member sizing
+- Fabrication or erection requirements that affect quantity or labor
+- Any schedule or table reference that defines a material type
 
-        **1. PARSE SCHEDULES (Tables):**
-        - Look for Markdown tables (lines starting with `|`).
-        - Identify the Table Name (e.g., "Shear Wall Schedule", "Lintel Schedule", "Footing Schedule").
-        - For each row, extract the **Symbol/Mark** (Column 1) and the **Specifications** (Other Columns).
-        - *Example:* If row is `| 1 | 5/8" Bolt | 16" OC |`, create a Rule: `Symbol="1", Specs="5/8" Bolt @ 16" OC"`.
+### IGNORE:
+- Pure administrative notes (notify architect, submittals, permits)
+- Contractor liability statements
+- Testing and inspection procedures that don't define materials
 
-        **2. EXTRACT GENERAL PROTOCOLS (Text):**
-        - Look for sections like "STRUCTURAL STEEL", "CONCRETE", "WOOD".
-        - Extract **Global Defaults** that affect estimation.
-        - *Example:* "All structural steel shall be ASTM A992." -> Keep this.
-        - *Example:* "Concrete strength 3000 psi." -> Keep this.
-        - *Example:* "Notify architect of discrepancies." -> Ignore (Administrative).
-
-        **3. OUTPUT FORMAT:**
-        Return a JSON object matching the `TextRulesExtraction` schema.
-        - `rules`: List of specific schedule items.
-        - `general_notes`: List of global material specs.
-        """
-    return prompt
-
+### OUTPUT:
+Return as TextRulesExtraction schema:
+- sections: group related rules under a section_name (e.g. "CONCRETE", "STRUCTURAL STEEL", "BOLTS AND FASTENERS")
+- general_notes: project-wide notes that don't fit a specific section
+"""
 # ------ AGENT 2. PROCESS PLAN ---------
 def prompt_for_node_process_plans():
    prompt = """
@@ -1178,13 +1176,18 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, s
       again in SHEET DEFINITIONS. Do NOT produce a BOM item from SHEET DEFINITIONS 
       for anything that was already handled by a DETECTED_SYMBOL.
 
-    SOURCE 3 — SHEET DEFINITIONS (schedules, notes, rules from this sheet):
+    SOURCE 3 — SHEET DEFINITIONS (schedules, notes, rules from this sheet + global structural specs):
       All schedule tables and keyed notes extracted from this sheet and stored in the
       knowledge graph. These define text marks you may see written directly on the plan
       — marks like CW1, CW3, MW1, F11, MJ1 that are NOT inside callout bubbles.
 
       When you see a text label on the plan (e.g. "CW1" on a wall, "MJ1" at a door jamb),
       look it up in the SHEET DEFINITIONS below to find its specification.
+      
+      Also included are GLOBAL structural specifications extracted from the project's
+      general notes pages (concrete strengths, steel grades, bolt standards, etc.).
+      Use these to validate or resolve any material spec that is not explicitly called
+      out on the floor plan itself.
 
       Use this data to:
       - Resolve wall marks (CW1 → 24" thick, 13'-0" height, #6 AT 6" O.C.)

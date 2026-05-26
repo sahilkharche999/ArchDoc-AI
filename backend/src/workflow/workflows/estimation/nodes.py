@@ -152,28 +152,38 @@ def node_process_text_rules(state: ProjectState,config):
     """
     logger.info("--- NODE 1: Processing Text Rules ---")
     text_pages = [p for p, t in state["page_map"].items() if t == "text"]
-    
+
+    if not text_pages:
+        logger.info("No text pages found, skipping")
+        return {"general_rules": state.get("general_rules", "")}
+
     for page_num in text_pages:
-        # 1. Extract Single Page PDF
         logger.debug(f"[Page {page_num}] Start processing")
+
+        # 1. Extract Single Page PDF
         page_pdf_path = f"{state['output_dir']}/notes_{page_num}.pdf"
         try:
             reader = PdfReader(state["pdf_path"])
             writer = PdfWriter()
             writer.add_page(reader.pages[page_num])
-            with open(page_pdf_path, "wb") as f: writer.write(f)
+            with open(page_pdf_path, "wb") as f:
+                writer.write(f)
         except Exception as e:
             logger.error(f"PDF extraction failed: {e}")
-            raise
+            continue
 
-        # 2. Run MinerU (Assuming this function works and saves to the path below)
+        # 2. Run MinerU
         logger.debug(f"   > Running MinerU on Page {page_num}...")
-        minerU_pdf_creating_extration(page_pdf_path, state["output_dir"],"pipeline")
+        try:
+            minerU_pdf_creating_extration(page_pdf_path, state["output_dir"], "pipeline")
+        except Exception as e:
+            logger.warning(f"   ! MinerU failed on page {page_num} — skipping | error={e}")
+            continue
 
-        # 3. Read the Markdown File
-        # Note: Adjust path logic if MinerU creates subfolders differently
         md_file_path = f"{state['output_dir']}/notes_{page_num}/auto/notes_{page_num}.md"
-        
+        images_dir = f"{state['output_dir']}/notes_{page_num}/auto/images"
+
+        # 3. Read markdown and strip tables
         try:
             with open(md_file_path, "r", encoding="utf-8") as f:
                 markdown_content = f.read()
@@ -181,40 +191,87 @@ def node_process_text_rules(state: ProjectState,config):
             logger.error(f"   ! Markdown file not found: {md_file_path}")
             continue
 
-        # 4. The Advanced Prompt
-        logger.debug("   > Calling LLM to parse Rules...")
-        
-        prompt=prompt_node_process_text_rules(markdown_content)
+        text_only = re.sub(r'<table>.*?</table>', '', markdown_content, flags=re.DOTALL).strip()
 
-        msg = HumanMessage(content=prompt)
-        
-        try:
-            result = llm_flash.with_structured_output(TextRulesExtraction).invoke([msg])
+        # 4. Call 1 — summarize text rules
+        if text_only:
+            logger.debug("   > Calling LLM to summarize text rules...")
+            try:
+                prompt = prompt_node_process_text_rules(text_only)
+                msg = HumanMessage(content=prompt)
+                result = llm_flash.with_structured_output(TextRulesExtraction).invoke([msg])
 
-            # Store Rules in Graph
-            for section in result.sections:
-                section_name = section.section_name
-                for rule in section.rules:
+                for section in result.sections:
+                    for rule in section.rules:
+                        graph_db.add_text_rule(
+                            project_id=config["configurable"]["thread_id"],
+                            section_name=section.section_name,
+                            rule_number=rule.rule_number,
+                            text=rule.text,
+                            page_num=page_num,
+                        )
+                        logger.debug(f"   > Graph: Added Rule {rule.rule_number} in section '{section.section_name}'")
+
+                for idx, note in enumerate(result.general_notes or []):
                     graph_db.add_text_rule(
                         project_id=config["configurable"]["thread_id"],
-                        section_name=section_name,
-                        rule_number=rule.rule_number,
-                        text=rule.text,
-                        page_num=page_num
+                        section_name="GENERAL_NOTES",
+                        rule_number=idx + 1,
+                        text=note,
+                        page_num=page_num,
                     )
-                    logger.debug( f"   > Graph: Added Rule {rule.rule_number} in section '{section_name}'")
-            
-            # Store General Notes in State (Memory)
-            if result.general_notes:
-                formatted_notes = f"\n--- PAGE {page_num} NOTES ---\n" + "\n".join(result.general_notes)
-                state["general_rules"] += formatted_notes
+                    logger.debug(f"   > Graph: Added general note {idx + 1}")
 
-        except Exception as e:
-            logger.exception(f"Failed to parse text rules on page {page_num}: {e}")
-            raise
-                
-    return {"general_rules": state["general_rules"]}
+            except Exception as e:
+                logger.warning(f"   ! Text rule extraction failed on page {page_num} — skipping | error={e}")
 
+        # 5. Call 2..N — process each table image
+        if os.path.exists(images_dir):
+            image_files = [f for f in os.listdir(images_dir) if f.endswith(('.jpg', '.png'))]
+            logger.debug(f"   > Found {len(image_files)} table images to process")
+
+            for img_file in image_files:
+                img_path = os.path.join(images_dir, img_file)
+                try:
+                    b64 = load_image_base64(img_path)
+                    prompt = prompt_for_node_process_plans()  # reuse — classifies and extracts schedule
+                    msg = HumanMessage(content=[
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
+                    ])
+                    result = llm_flash.with_structured_output(IngestionOutput).invoke([msg])
+
+                    if result.type in ("Schedule", "Keyed_Notes"):
+                        rows = result.rows or []
+                        columns = result.columns or []
+                        logger.debug(f"   > Extracted table: {result.title} | rows={len(rows)}")
+
+                        for idx, row in enumerate(rows):
+                            primary_key = None
+                            if columns:
+                                primary_key = row.get(columns[0])
+                                if primary_key:
+                                    primary_key = " ".join(primary_key.strip().split())
+                            if not primary_key or primary_key in ("•", "-", "*", "UNKNOWN"):
+                                primary_key = str(idx + 1)
+
+                            graph_db.add_schedule_rule(
+                                project_id=config["configurable"]["thread_id"],
+                                schedule_name=result.title or img_file,
+                                symbol=primary_key,
+                                row_data=row,
+                                columns=columns,
+                                page_num=page_num,
+                                sheet_number=config["configurable"]["thread_id"]
+                            )
+                    else:
+                        logger.debug(f"   > Image {img_file} classified as {result.type} — skipping")
+
+                except Exception as e:
+                    logger.warning(f"   ! Table image extraction failed | image={img_file} | error={e}")
+                    continue
+
+    return {"general_rules": state.get("general_rules", "")}
 
 
 # ---  AGENT 2: PROCESS PLAN ---
@@ -1186,13 +1243,18 @@ def node_agent_4_merger(state: ProjectState,config):
 
         sheet_definitions = graph_db.get_all_definitions_for_sheet(project_id, sheet_number)
         logger.debug(f"    > Fetched {len(sheet_definitions)} definitions for sheet {sheet_number}")
+        global_definitions = graph_db.get_all_definitions_for_sheet(project_id, project_id)
+        logger.debug(f"    > Fetched {len(global_definitions)} global definitions")
+        all_definitions = sheet_definitions + global_definitions
+        logger.debug(f"    > Total definitions for LLM: {len(all_definitions)}")
+        
 
         # 3. ONE-SHOT PROMPT (No ReAct Loop needed anymore!
         system_prompt =prompt_for_agent_4_merger(
             json.dumps(enriched_symbols, indent=2),
             valid_materials_str,
             sheet_number,
-            json.dumps(sheet_definitions, indent=2)
+            json.dumps(all_definitions, indent=2)
             )
 
         # 4. Call LLM (Standard Invoke)
