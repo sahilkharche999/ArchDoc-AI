@@ -26,8 +26,8 @@ workflow.add_node("process_details", node_process_details)
 workflow.add_node("agent_4_merger", node_agent_4_merger)
 
 workflow.add_edge(START, "classify")
-workflow.add_edge("classify", "process_plans")
-# workflow.add_edge("process_text", "process_plans")
+workflow.add_edge("classify", "process_text")
+workflow.add_edge("process_text", "process_plans")
 workflow.add_conditional_edges(
     "process_plans",
     route_after_hitl

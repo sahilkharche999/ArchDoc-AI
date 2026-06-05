@@ -4,7 +4,7 @@ import {Button} from "./ui/button";
 import {FileText, Upload,} from "lucide-react";
 import {Input} from "./ui/input";
 import {Document, pdfjs,Page} from "react-pdf";
-
+import { useAuth } from "../app/context/AuthContext";
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
   import.meta.url
@@ -30,6 +30,7 @@ export function UploadState({onStartProcessing}: UploadStateProps) {
     const [fileUrl, setFileUrl] = useState<string | null>(null);
     const [pdfVersion, setPdfVersion] = useState(0);
     const [sheetPrefix, setSheetPrefix] = useState<string>("");
+    const { logout, token } = useAuth();
     const [pdfPageRotations, setPdfPageRotations] = useState<{[key: number]: number}>({});
     const handleDragOver = (e: React.DragEvent) => {
         e.preventDefault();
@@ -39,6 +40,7 @@ export function UploadState({onStartProcessing}: UploadStateProps) {
     const handleDragLeave = () => {
         setIsDragging(false);
     };
+    
 
     const handleDrop = (e: React.DragEvent) => {
         e.preventDefault();
@@ -79,6 +81,7 @@ export function UploadState({onStartProcessing}: UploadStateProps) {
         const response = await fetch(`${import.meta.env.VITE_API_URL}/api/v1/upload`, {
             method: "POST",
             body: formData,
+            headers: { "Authorization": `Bearer ${token}` }
         });
 
         const data = await response.json();
@@ -116,6 +119,7 @@ export function UploadState({onStartProcessing}: UploadStateProps) {
       `${import.meta.env.VITE_API_URL}/api/v1/pdf/fix`,
       {
         method: "POST",
+        headers: { "Authorization": `Bearer ${token}` },
         body: formData,
       }
     );

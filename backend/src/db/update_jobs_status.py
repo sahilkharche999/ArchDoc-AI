@@ -36,6 +36,11 @@ def update_job_progress(job_id:str, status:str, step:str):
             SET current_state = %s, status = %s
             WHERE job_id = %s
         """, (step,status,job_id))
+        cursor.execute("""
+            UPDATE jobs
+            SET status = %s
+            WHERE job_id = %s
+        """, (status, job_id))
 
         conn.commit()
         cursor.close()

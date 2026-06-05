@@ -26,6 +26,7 @@ class SectionPageState(TypedDict, total=False):
 class ProjectState(TypedDict):
     pdf_path: str
     output_dir: str
+    gemini_api_key: Optional[str]
 
     page_map: Dict[int, str]
 

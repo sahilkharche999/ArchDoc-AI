@@ -15,39 +15,42 @@ def prompt_for_node_classify_pages():
     return prompt
 
 # ------ AGENT 1. PROCESS TEXT  ---------
-def prompt_node_process_text_rules(markdown_content:str):
-    prompt = f"""
-        You are a Structural Engineer analyzing the "General Notes" and "Schedules" of a construction project.
-        The input below is a Markdown file extracted from the PDF.
+def prompt_node_process_text_rules(markdown_content: str):
+    return f"""
+You are a Structural Engineer reviewing construction specification notes for a steel fabrication estimator.
 
-        ### YOUR GOAL
-        Extract structured **Rules** and **Protocols** that will guide the estimation process.
+### INPUT:
+{markdown_content}
 
-        ### INPUT MARKDOWN:
-        {markdown_content}
+### YOUR GOAL
+Extract any information that would help a steel estimator understand:
+- What materials are required and to what standard
+- What dimensions, strengths, or grades apply
+- Any rules that affect how much material is needed or how it is fabricated
 
-        ### INSTRUCTIONS:
+### KEEP anything related to:
+- Steel members, grades, standards (structural steel, rebar, bolts, welds, anchor bolts)
+- Concrete specs that affect steel embedment or anchorage
+- Wood or other materials if they interact with steel connections
+- Load values, spans, or spacing rules that affect member sizing
+- Fabrication or erection requirements that affect quantity or labor
+- Any schedule or table reference that defines a material type
 
-        **1. PARSE SCHEDULES (Tables):**
-        - Look for Markdown tables (lines starting with `|`).
-        - Identify the Table Name (e.g., "Shear Wall Schedule", "Lintel Schedule", "Footing Schedule").
-        - For each row, extract the **Symbol/Mark** (Column 1) and the **Specifications** (Other Columns).
-        - *Example:* If row is `| 1 | 5/8" Bolt | 16" OC |`, create a Rule: `Symbol="1", Specs="5/8" Bolt @ 16" OC"`.
+### IGNORE:
+- Pure administrative notes (notify architect, submittals, permits)
+- Contractor liability statements
+- Testing and inspection procedures that don't define materials
 
-        **2. EXTRACT GENERAL PROTOCOLS (Text):**
-        - Look for sections like "STRUCTURAL STEEL", "CONCRETE", "WOOD".
-        - Extract **Global Defaults** that affect estimation.
-        - *Example:* "All structural steel shall be ASTM A992." -> Keep this.
-        - *Example:* "Concrete strength 3000 psi." -> Keep this.
-        - *Example:* "Notify architect of discrepancies." -> Ignore (Administrative).
+### OUTPUT:
+Return as TextRulesExtraction schema:
+- sections: list of objects with:
+    - section_name: string (e.g. "CONCRETE", "STRUCTURAL STEEL")
+    - rules: list of objects with:
+        - rule_number: integer
+        - text: string (the rule content)
+- general_notes: list of strings for project-wide notes
 
-        **3. OUTPUT FORMAT:**
-        Return a JSON object matching the `TextRulesExtraction` schema.
-        - `rules`: List of specific schedule items.
-        - `general_notes`: List of global material specs.
-        """
-    return prompt
-
+"""
 # ------ AGENT 2. PROCESS PLAN ---------
 def prompt_for_node_process_plans():
    prompt = """
@@ -105,7 +108,7 @@ def prompt_for_node_process_plans():
   and "items": []
 
   -------------------------
-  STEP 1B — PARTIAL PLAN / PARTIAL ELEVATION DETECTION (CRITICAL)
+  STEP 1A — PARTIAL PLAN / PARTIAL ELEVATION DETECTION (CRITICAL)
   -------------------------
 
   Before classifying as Detail, check if this is a Partial Plan or Partial Elevation.
@@ -162,6 +165,48 @@ def prompt_for_node_process_plans():
 
   If this matches PARTIAL PLAN or PARTIAL ELEVATION criteria → return Plan_View immediately.
   DO NOT classify it as Detail.
+  -------------------------
+  STEP 1B — ASSEMBLY / CALLOUT VIEW DETECTION (CRITICAL — check before Detail or Schedule)
+  -------------------------
+ 
+  Some drawings are PICTORIAL ASSEMBLY VIEWS — an isometric, exploded, or 3D
+  view of a single fabricated object (a cover, a frame, a weldment) — where
+  MANY numbered circles on leader lines point to the individual parts that make
+  up that object. Those numbers are INSTANCE CALLOUTS that reference a separate
+  PART LIST / BILL OF MATERIALS table elsewhere on the sheet — exactly the way
+  grid bubbles reference a plan. This is a SPATIAL INDEX of many parts, so it
+  plays the role of a Plan View.
+ 
+  Classify as "Plan_View" ONLY when ALL of these are true together:
+ 
+  • The drawing is a single 3D / isometric / pictorial whole-assembly view
+    (NOT a flat orthographic table, NOT a zoomed cross-section of one joint).
+  • MULTIPLE numbered circles (typically 4 or more) are spread ACROSS the
+    object on leader lines, each pointing to a DIFFERENT part of the assembly.
+  • The numbers are BARE INTEGERS (e.g. 1, 2, 14, 15) — NOT a "N/Sheet"
+    detail reference like 3/S3-01, and NOT rows of a table.
+  • The drawing answers "WHERE is each numbered part on this assembly?"
+    — it locates instances that are DEFINED in a part list, it does not
+    itself define material specs.
+ 
+  If ALL four hold → return "type": "Plan_View" and "items": [].
+ 
+  DO NOT classify such a view as:
+    - "Schedule"  → it has NO spec columns (ITEM/QTY/DESCRIPTION/MATERIAL);
+                    the numbered circles are not table rows.
+    - "Detail"    → it shows the WHOLE assembly with many part callouts,
+                    not ONE joint/connection with weld symbols and material
+                    labels pointing into the drawing.
+ 
+  COUNTER-EXAMPLES (these are NOT Step 1A):
+    ✗ A flat ITEM / QTY / DESCRIPTION / MATERIAL table → that IS the part list
+      itself → classify as "Schedule".
+    ✗ A single flat cross-section of one part with 2-3 dimension callouts and
+      no 3D body → "Detail".
+    ✗ A numbered list of text statements → "Keyed_Notes".
+    ✗ Circles in "N/Sheet" format (3/S3-01) pointing outward to other sheets
+      → those are detail references, handled elsewhere.
+ 
 
   -------------------------
   STEP 1C — DETAIL DETECTION (CRITICAL)
@@ -268,7 +313,14 @@ def prompt_for_node_process_plans():
     → Format as: "TRI-<number>"
 
   • No visible enclosing shape?
-    → Use raw text (e.g., "F5")
+    → Use raw text (e.g., "24", F5")
+
+  - No visible enclosing shape?
+    → Use raw text (e.g., "F5", "CW8")
+
+  - Bullet points (•, -, *) with no number?
+    → Assign sequential numbers: "1", "2", "3"
+    → These are unnumbered notes — give them an index.
 
   CRITICAL:
   The shape is more important than the text alone.
@@ -334,13 +386,17 @@ def prompt_for_node_process_plans():
   {
     "type": "Keyed_Notes",
     "title": "Notes Title",
-    "items": [
+    "columns": ["key_id", "text"],
+    "rows": [
       {
         "key_id": "HEX-1",
         "text": "note description"
       }
     ]
   }
+  
+  If notes use bullet points (•) instead of numbers,
+  assign sequential key_ids: "1", "2", "3", etc.
 
   For Plan Views:
 
@@ -687,348 +743,6 @@ Return ONLY valid JSON with no explanation:
 {"type": "DEPENDENT_DETAIL"}
 {"type": "INDEPENDENT_DETAIL"}
 {"type": "IGNORE"}"""
-
-# def prompt_for_extract_single_detail(group_title:str,group_detail_id:str):
-#     extract_single_detail_prompt = f"""
-#     You are a Senior Structural Detailer performing forensic material extraction.
-
-#     You are analyzing one complete Detail Unit:
-
-#     Title: "{group_title}"
-#     Detail ID: "{group_detail_id}"
-
-#     All images and text blocks provided belong ONLY to this detail.
-
-#     ------------------------------------------------------------
-#     ### YOUR OBJECTIVE
-
-#     Extract a precise and structured Bill of Materials (BOM)
-#     and associated fabrication metrics.
-
-#     You must behave like an experienced steel detailer,
-#     not a summarizer.
-
-#     ### STRICT VISUAL EXTRACTION MODE (CRITICAL)
-
-#     You are performing MATERIAL TAKEOFF from a drawing.
-
-#     You are NOT allowed to:
-#     - infer missing materials
-#     - assume standard components
-#     - complete partial systems
-
-#     You MUST:
-#     - extract ONLY what is explicitly visible in the image
-#     - skip anything unclear
-
-#     If a material is NOT clearly visible:
-#     → DO NOT include it
-
-#     ------------------------------------------------------------
-#     ### MULTIMODAL CHAIN-OF-THOUGHT PROCESS
-
-#     -------------------------
-#     STEP 1 — PRIMARY MATERIAL EXTRACTION (FROM IMAGE)
-#     -------------------------
-#     Inspect images carefully.
-
-#     Extract ONLY visible material callouts:
-
-#     Look for:
-#     • Leader arrows
-#     • Text near arrows
-#     • Labels on components
-#     • Table entries inside detail
-
-#     Extract:
-#     • Material size (e.g., L4X4X1/4, ROD3/4)
-#     • Length if explicitly written
-#     • Spacing rules (e.g., @ 12" O.C.)
-
-#     CRITICAL RULE:
-#     Extract material names EXACTLY AS WRITTEN.
-#     PATTERN A: ANGLES (L-SHAPES)
-#     - Format: `L[a]X[b]X[c] X [length]`
-#     - Example: `L4X4X1/4 X 0'-3"` or `L8X4X1/2X10"`
-#     - Rule: Split at the LAST "X" or space before a dimension.
-#     - `item_name` = The size only: `L4X4X1/4` (ALWAYS capitalize lowercase "x" to "X")
-#     - `piece_length_ft` = Convert the length portion to decimal feet:
-#         • `0'-3"` → 0.25
-#         • `10"` → 0.833
-#         • `1'-6"` → 1.5
-#     - If no length is specified, set `piece_length_ft` to null.
-
-#     PATTERN B: RODS / BOLTS / BARS
-#     - Format: `[size] DIA. ROD` or `ROD[size]`
-#     - Example: `3/4" DIA. ROD` or `ROD5/8`
-#     - Rule: Normalize to `ROD[size]`.
-#     - `item_name` = `ROD3/4` or `ROD5/8`
-#     - `piece_length_ft` = null (unless an explicit length like `X 2'-0"` is attached)
-    
-#     Spacing (e.g., @ 12" O.C.) is NOT length.
-#     DO NOT convert spacing into piece_length_ft.
-#     If only spacing is present:
-#     → piece_length_ft = null
-#     → qty_rule must contain spacing logic
-
-#     STRICT ACTIONS:
-#     1. ALWAYS capitalize lowercase "x" to "X" in `item_name`.
-#     2. NEVER combine size and length in `item_name`.
-#     3. NEVER use washer/bolt dimensions as main member lengths.
-#     4. If no explicit length exists (e.g., "TYP.", "SEE PLAN", variable spacing), set `piece_length_ft` to null.
-
-#     Examples:
-
-#     Bad: "Angle 4x4"
-#     Good: "L4X4X1/4"
-
-#     Bad: "3/4 inch rod"
-#     Good: "ROD3/4"
-
-#     IGNORE:
-#     • Geometry without labels
-#     • Assumed components
-#     • Anything not explicitly written
-
-#     -------------------------
-#     STEP 1B — EXTENDED MATERIAL CATEGORIES (BEYOND STRUCTURAL SHAPES)
-#     -------------------------
-
-#     In addition to standard shapes (L, W, HSS, C, FB), you MUST also extract:
-
-#     CATEGORY 2 — PIPE & TUBE
-#     Any callout with "PIPE", "SCH 40", "STD WT", "SPOOL", "STN STL PIPE"
-#     - Extract diameter and schedule: e.g. "Pipe8\" Sch 40", "Pipe2\" Sch 40", "16\" STN STL SPOOL"
-#     - material_type = "PIPE"
-#     - piece_length_ft = the spool length or run length if stated
-#     - If length is "AS REQ'D" or "VIF" → set piece_length_ft = null
-#     - qty_rule: "FIXED: N" if count given, "VARIABLE: per location" otherwise
-
-#     CATEGORY 3 — PIPE FITTINGS (Count-Based Items)
-#     Flanges, elbows, tees, bends — these are COUNTED not measured in linear feet
-#     - Extract: item_name as exact text (e.g. "(1)-8\" 150# WN/FF FLANGE A105", "16\" 90° DIP BEND (FLGxFLG)")
-#     - material_type = "FITTING"
-#     - piece_length_ft = null (count-based)
-#     - qty_rule = "FIXED: N" where N is the count shown
-
-#     CATEGORY 4 — SEEP RINGS / PIPE PENETRATION RINGS
-#     Any callout mentioning "SEEP RING", "SEAL RING", "WATERSTOP RING"
-#     - Example: "1/4\" X 3\" STEEL SEEP RING CONTINUOUS AROUND PIPE"
-#     - Example: "2\"x3/8\" SEEP RING (1/4\" WELD BOTH SIDES)"
-#     - Extract as flat bar: item_name = "SEEP RING [size]", material_type = "FB"
-#     - piece_length_ft = pipe_OD_inches * π / 12  (circumference in feet)
-#       - 8" pipe seep ring: 8 * 3.14159 / 12 = 2.09 ft per ring
-#       - 16" pipe seep ring: 16 * 3.14159 / 12 = 4.19 ft per ring
-#     - qty_rule = "FIXED: N" for the number of penetrations shown
-
-#     CATEGORY 5 — RODS, ANCHOR BOLTS, THREADED RODS
-#     Any "ROD", "ANCHOR BOLT", "EMBED ROD", "EPOXY BOLT", "SS BOLT", "TITEN HD"
-#     - material_type = "ROD"
-#     - Extract diameter and length: "ROD3/4", "1/2\" EPOXY BOLT 5\" EMBED"
-#     - piece_length_ft = embed length + projection if stated
-
-#     CATEGORY 6 — OVERFLOW / WEIR STRUCTURES
-#     Any "OVERFLOW WEIR", "OVERFLOW CONE", "RISER PIPE"
-#     - Extract as plate (PL) with dimensions if shown
-#     - Example: "3'-0\"ø x 16\"ø OVERFLOW WEIR" → record as cone/weir assembly
-
-
-#     ------------------------------------------------------------
-#     ### FINISH / TREATMENT FLAGS — CRITICAL
-#     ------------------------------------------------------------
-
-#     For EACH material item, you MUST determine and record in the `notes` field:
-
-#     - GALVANIZED: If callout says "HOT DIP GALVANIZE", "GALV", "HDG" → notes = "GALVANIZED"
-#     - STAINLESS STEEL: If callout says "SS", "STN STL", "316", "304", "STAINLESS" → notes = "STAINLESS STEEL 316" 
-#     - PAINTED/COATED: If callout says "POWDER COAT", "EPOXY COAT" → notes = "COATED"
-#     - RAW/PLAIN: If no finish specified → notes = "RAW"
-
-#     This is CRITICAL for pricing — galvanized and stainless items have different charge rates.
-
-#     ------------------------------------------------------------
-#     ### LADDER MATH — SPECIAL RULES
-#     ------------------------------------------------------------
-
-#     When you see a LADDER DETAIL:
-#     - Rails (side rails): piece_length_ft = full height of ladder. If height not shown → null
-#       - material: FB (flat bar, channel, or pipe as specified)
-#       - qty_rule = "FIXED: 2" (always 2 rails)
-#     - Rungs: spacing usually 12" O.C.
-#       - qty_rule = "VARIABLE: (ladder_height_inches / 12) + 1 rungs"
-#       - piece_length_ft = rung width (usually 18"-24", approximately 1.5-2.0 ft)
-#     - Base angles/anchors: qty = 2 (one per rail bottom)
-#     - Top connection plates: qty = 2
-
-#     ------------------------------------------------------------
-#     ### PIPING SPOOL MATH — SPECIAL RULES
-#     ------------------------------------------------------------
-
-#     When you see pipe details with "SPOOL LENGTH AS REQ'D" or "VIF":
-#     - Still extract the pipe size and schedule
-#     - Set piece_length_ft = null
-#     - In qty_rule note "VARIABLE: field measure" 
-#     - The estimator will fill in the length from civil drawings
-
-#     For seep rings around pipe penetrations through concrete:
-#     - Count the number of pipe penetrations shown in the detail
-#     - Calculate circumference: pipe_diameter_inches × π / 12 = feet per ring
-#     - Total LF = circumference × number of penetrations
-
-#     ------------------------------------------------------------
-#     ### STAIR MATH — SPECIAL RULES  
-#     ------------------------------------------------------------
-
-#     When you see a STAIR DETAIL (C-stringers, treads, handrail):
-#     - Stringers: length = stair run length (hypotenuse), qty = 2 unless noted otherwise
-#     - Treads: count from riser schedule or calculate (run / tread_depth)
-#     - Guardrail/Handrail: length = stair run + landing extensions
-#     - Base plates: qty = 2 (one per stringer bottom), extract dimensions
-
-#     When a stair has a referenced schedule (qty_rule contains "SEE SCHEDULE"):
-#     - Record qty_rule = "VARIABLE: per schedule"
-#     - Do NOT hard-code quantity
-#     - Agent 4 will resolve against the schedule from GraphDB
-
-#     -------------------------
-#     STEP 2 - MATERIAL EVIDENCE RULE (CRITICAL)
-#     -------------------------
-
-#     For EVERY material:
-
-#     You MUST be able to point to exact visible text in the image.
-
-#     If you cannot see the exact text:
-#     → DO NOT include that material
-
-#     -------------------------
-#     STEP 3 — READ NOTES(LOW PRIORITY)
-#     -------------------------
-
-#     Notes are secondary.
-
-#     Use notes ONLY if:
-#     - They directly reference a visible material
-#     - They do NOT introduce new materials
-
-#     DO NOT create materials from notes alone.
-
-#     -------------------------
-#     STEP 4 — DEFINE QUANTITY LOGIC
-#     -------------------------
-
-#     For each material, determine:
-
-#     Is it FIXED?
-#     Example:
-#     • 2 clips per ladder
-#     • 4 bolts per plate
-
-#     Or VARIABLE?
-#     Example:
-#     • Rungs @ 12\" O.C.
-#     • Rail length equals ladder height
-#     • Bolt spacing @ 16\" O.C.
-
-#     Return logic as:
-
-#     "FIXED: 2"
-#     "VARIABLE: Height"
-#     "VARIABLE: Spacing @ 12\" O.C."
-
-#     Be precise and technical.
-
-#     -------------------------
-#     STEP 5 — FABRICATION METRICS
-#     -------------------------
-
-#     If visible, extract:
-
-#     • Bolt count
-#     • Hole count
-#     • Weld length
-#     • Clip count
-#     • Plate count
-
-#     Only extract what is explicitly visible.
-#     Do NOT invent fabrication metrics.
-
-#     -------------------------
-#     STEP 6 — VISUAL REASONING TRACE
-#     -------------------------
-
-#     Return ONLY the exact text seen in the image.
-
-#     Examples:
-#     "L4X4X1/4 X 0'-3\""
-#     "3/4\" DIA ROD @ 12\" O.C."
-
-#     DO NOT explain.
-#     DO NOT interpret.
-#     ONLY quote visible text.
-    
-#     ------------------------------------------------------------
-#     ### UNKNOWN DETAIL MODE
-
-#     If title is UNKNOWN:
-
-#     - Do NOT infer detail type
-#     - Do NOT assume system
-#     - Extract ONLY visible material text
-
-#     No interpretation allowed
-    
-#     ### FINAL VALIDATION CHECK
-
-#     Before returning:
-
-#     For each material:
-#     → Verify it exists in visible image text
-
-#     If not:
-#     → REMOVE it
-
-#     ### OUTPUT FORMAT
-
-#     Return a single DetailExtraction object:
-
-#     {{
-#     "detail_id": "{group_detail_id}",
-#     "title": "{group_title}",
-#     "visual_reasoning": "...",
-#     "materials": [
-#         {{
-#         "item_name": "L4X4X1/4",
-#         "material_type": "L",
-#         "piece_length_ft": 0.25,
-#         "qty_rule": "FIXED: 2",
-#         "notes": "GALVANIZED | Base connection clips"   
-#         }},
-#         {{
-#         "item_name": "Pipe8\" Sch 40",
-#         "material_type": "PIPE",
-#         "piece_length_ft": 3.0,
-#         "qty_rule": "FIXED: 1",
-#         "notes": "GALVANIZED | Vent pipe spool"
-#         }},
-#         {{
-#         "item_name": "SEEP RING 1/4\"X3\"",
-#         "material_type": "FB",
-#         "piece_length_ft": 2.09,
-#         "qty_rule": "FIXED: 1",
-#         "notes": "RAW | 8\" pipe circumference = 2.09 ft"
-#         }}
-#     ]
-#     }}
-
-#     Rules:
-#     - Return JSON only
-#     - No markdown
-#     - No commentary
-#     - Do not hallucinate materials
-#     - If no materials visible, return empty materials list
-#     """
-#     return extract_single_detail_prompt
 
 
 def prompt_for_extract_single_detail(group_title: str, group_detail_id: str):
@@ -1424,407 +1138,30 @@ def prompt_for_extract_single_detail(group_title: str, group_detail_id: str):
     - piece_length_ft must be a number in decimal feet or null
     - Never write a formula result in qty_rule — write what the drawing says
 """
+
 # ------ AGENT 4. AGENT MERGER ----------
 
-# previous prompt
-
-# def prompt_for_agent_4_merger(DETECTED_SYMBOLS:str,valid_materials_str:str,sheet_number:str):
-#     """
-#     Accepts the list of dictionaries returned by Neo4j (graph_data).
-#     """
-#     prompt = f"""
-#     You are the Senior Structural Estimator.
-
-#     You are not extracting text.
-#     You are not detecting symbols.
-#     You are EXECUTING STRUCTURAL LOGIC.
-
-#     You have already received:
-
-#     1. A floor plan image (cropped via MinerU).
-#     2. Detected symbols with bounding boxes.
-#     3. Enriched metadata from Neo4j (GraphRAG lookups).
-#     4. General rules and grid metadata.
-#     5. A valid materials list.
-
-#     Your job is to INTERLACE geometry + metadata + rules to produce the Final Bill of Materials.
-#     ------------------------------------------------------------
-#     ### LENGTH RESOLUTION PRIORITY (STRICT)
-#     Before calculating linear feet, check the source of the length:
-#     1. IF `piece_length_ft` > 0 in linked_definition.materials → USE IT DIRECTLY.
-#       Formula: total_linear_feet = quantity * piece_length_ft
-#     2. IF `piece_length_ft` is null AND qty_rule is VARIABLE → APPLY SPACING/HEIGHT FORMULA.
-#     3. IF `piece_length_ft` is null AND type is PLAN-BASED (Beams/Columns) → MEASURE from plan dimensions.
-#     4. NEVER invent lengths. NEVER use accessory dimensions (washers, bolts) as main member lengths.
-#     ------------------------------------------------------------
-#     ### INPUT DATA PROVIDED
-
-#     DETECTED SYMBOLS (Already Enriched from Graph):
-#     {DETECTED_SYMBOLS}
-
-#     VALID MATERIALS LIST:
-#     {valid_materials_str}
-
-#     CURRENT DRAWING SHEET:
-#     {sheet_number}
-
-#     NOTE:
-#     Each symbol includes:
-#     - bbox (location on plan)
-#     - linked_definition (Schedule or Detail data)
-#     - rule_specs (if spacing rule)
-#     - material components (if detail)
-#     - symbol_type
-
-#     The system has already loaded metadata such as:
-#     - Grid spacing
-#     - Floor elevations
-#     - Top of Steel elevation
-#     - Known constants
-
-#     ------------------------------------------------------------
-#     ### YOUR CORE RESPONSIBILITY
-
-#     You must now:
-
-#     1. VISUALLY INSPECT the floor plan image.
-#     2. Locate the dimension text near each symbol (using bbox as anchor).
-#     3. Apply structural logic using:
-#     - Linked definitions
-#     - Dimensions found
-#     - Grid references
-#     - Elevation metadata
-#     4. Execute correct math.
-#     5. Produce the Final Bill of Materials.
-
-#     You must behave like a human structural estimator.
-
-#     ------------------------------------------------------------
-#     ### MULTIMODAL CHAIN-OF-THOUGHT EXECUTION PLAN
-
-#     ------------------------------------------------------------
-#     STEP 1 — VISUAL DIMENSION RESOLUTION
-#     ------------------------------------------------------------
-
-#     For each detected symbol:
-
-#     • Use its bounding box as spatial reference.
-#     • Look around that location in the image.
-#     • Identify dimension text:
-#         - Example: "13'-10\""
-#         - Example: "4'-0\" R.O."
-#         - Example: Beam span between Grid A-1 and A-2
-
-#     If dimension text is not directly visible:
-#     • Use grid intersection logic.
-#     • Measure span between grid lines.
-#     • Apply grid spacing metadata.
-
-#     Extract wall length or beam length in FEET.
-
-#     ------------------------------------------------------------
-#     STEP 2 — SYMBOL TYPE LOGIC BRANCHING
-#     ------------------------------------------------------------
-
-#     Determine type of symbol based on enriched metadata.
-
-#     CASE A — DETAIL CALLOUT (e.g., 7/S-3.2)
-
-#     • This represents an assembly.
-#     • Lookup linked_definition → returns component list.
-#     • If floor plan shows Qty = N:
-#         → Multiply N * each component.
-#     • If dimension applies to detail (e.g., ladder height):
-#         → Apply variable length logic.
-
-#     Example:
-#     If Ladder detail:
-#     - Rails = Height
-#     - Rungs = Height / spacing
-
-#     ------------------------------------------------------------
-#     CASE B — SPACING RULE (e.g., HEX-1 Shear Wall)
-
-#     • Linked definition contains spacing rule.
-#     • Example: "5/8 bolt @ 16\" O.C."
-
-#     Extract:
-#     • Wall Length (ft)
-#     • Spacing (inches)
-
-#     Convert:
-#     Wall Length ft → inches
-#     Compute:
-#     ((Wall Length inches / Spacing inches) + 1)
-
-#     Round UP.
-
-#     Apply anchor length:
-#     Each bolt = 1.5 ft (or defined rule)
-
-#     Add to ROD material list.
-
-#     ------------------------------------------------------------
-#     CASE C — BEAMS (W or HSS)
-
-#     If symbol indicates:
-#     • W-shape beam
-#     • HSS beam
-
-#     Use:
-#     - Visible dimension text
-#     - Or grid span metadata
-
-#     Total LF = Sum of lengths found.
-
-#     ------------------------------------------------------------
-#     CASE D — COLUMNS (HSS)
-
-#     Count instances.
-
-#     Apply height from metadata:
-#     Height = Top of Steel - Base Elevation
-
-
-#     Total LF = Count * Height
-
-#     ------------------------------------------------------------
-#     CASE E — LINTELS
-
-#     Find window width:
-#     Dimension text labeled "R.O."
-
-#     Apply:
-#     Width + 1.33 ft (bearing allowance)
-
-#     Add resulting LF to Angle material.
-
-#     ------------------------------------------------------------
-#     CASE F — PIPE & PIPING COMPONENTS
-    
-
-#     When a symbol references a detail containing pipe (material_type = "PIPE"):
-
-#     • PIPE (by diameter and schedule):
-#       - If spool length stated → total_linear_feet = piece_length_ft × qty_of_locations
-#       - If "VIF" or "AS REQ'D" → total_linear_feet = 0, note "field measure required"
-#       - Example: 8\" Sch 40, 3'-0\" spool, 8 roof vents = 8 × 3.0 = 24 LF
-
-#     • FITTINGS (flanges, elbows, bends) — COUNT ITEMS ONLY:
-#       - total_linear_feet = 0
-#       - quantity = fittings_per_detail × number_of_symbol_locations
-#       - Example: 2 flanges per vent × 8 vents = 16 flanges, 0 LF
-
-#     • SEEP RINGS (material_type = "FB", item_name contains "SEEP RING"):
-#       - piece_circumference_ft = pipe_OD_inches × 3.14159 / 12
-#       - total_linear_feet = piece_circumference_ft × number_of_penetrations
-#       - Example: 16\" pipe, 3 locations: 16 × 3.14159 / 12 × 3 = 12.57 LF
-
-#     ------------------------------------------------------------
-#     CASE G — LADDER COMPONENTS
-    
-
-#     When a symbol references a ladder detail:
-
-#     • Rails:
-#       - total_linear_feet = ladder_height_ft × 2
-#       - ladder_height = read from plan dimension text or elevation difference on image
-#       - If not visible → total_linear_feet = 0, note "height: field measure"
-
-#     • Rungs:
-#       - count = ceil(ladder_height_inches / 12) + 1
-#       - total_linear_feet = count × rung_width_ft (default 1.5 ft if not stated)
-
-#     • Anchors/Connection plates:
-#       - quantity = 2 bottom + 2 top per ladder
-
-#     ------------------------------------------------------------
-#     CASE H — STAIR COMPONENTS
-    
-
-#     When a symbol references a stair detail:
-
-#     • Stringers (C-channel):
-#       - length = sqrt(rise² + run²) per stringer
-#       - quantity = 2 unless noted otherwise
-
-#     • Guardrail / Handrail (pipe):
-#       - total_linear_feet = stair_run_ft + 2.0 ft (1'-0\" extension each end)
-
-#     ------------------------------------------------------------
-#     CASE I — FINISH TREATMENT TRACKING
-    
-
-#     For EVERY material item, check `notes` field from Agent 3 BOM:
-
-#     • "GALVANIZED" in notes:
-#       - Add to description: "(GALV)"
-#       - Flag: galvanized = "Yes" in logic_trace
-
-#     • "STAINLESS STEEL 316" in notes:
-#       - Note in logic_trace: "SS 316 rates apply"
-
-#     • "RAW" in notes:
-#       - Standard carbon steel pricing, no flag needed
-
-#     ------------------------------------------------------------
-#     DRAWING REFERENCE FORMAT
-
-#     source_drawing format: "SYMBOL/SHEET"
-#     Examples: "2/S3-01", "1A/S5-05", "A/S5-06"
-#     NOT: "2 on S301", "3 on S503"  
-
-#     ------------------------------------------------------------
-#     QUANTITY SCALING FROM PLAN — CRITICAL EXCEPTIONS
-  
-
-#     When symbol appears N times on plan:
-
-#     • Standard components → multiply ALL by N
-#     • FITTINGS (flanges, elbows) → fitting_count_per_detail × N, LF stays 0
-#     • SEEP RINGS → circumference × number_of_pipe_penetrations (NOT × symbol count)
-
-#     Example: 8 roof vent symbols (3/S503), each has 1× pipe 3'-0", 2× flanges, 1× seep ring:
-#     - Pipe8\" Sch 40: 8 × 3.0 = 24 LF, qty=8
-#     - 8\" WN/FF Flange: qty=16, total_linear_feet=0
-#     - 8\" 90° Elbow: qty=16, total_linear_feet=0
-#     - SEEP RING 1/4\"×3\": 8 × (8 × 3.14159/12) = 16.76 LF, qty=8
-
-#     ------------------------------------------------------------
-#     STEP 3 — MATERIAL NAME NORMALIZATION
-#     ------------------------------------------------------------
-
-#     MATERIAL MATCHING RULE (CRITICAL):
-
-#     • If material exists in VALID MATERIAL LIST → use it
-#     • If material does NOT exist:
-#         - DO NOT discard it
-#         - KEEP the original material_size exactly as extracted
-#         - Assign default values:
-#             lb_per_ft = 0
-#             charge_per_lb = 0
-
-#     • NEVER remove a material due to mismatch
-
-#     SS PREFIX HANDLING (CRITICAL)
-
-#       • When a material label on the drawing reads "W8x13 SS" or "SS W8x13":
-#         - "SS" means the material is Stainless Steel 316 — it is a finish specification, NOT part of the shape name
-#         - The material_size must be written WITHOUT the SS prefix: "W8X13" not "SS W8X13"
-#         - Instead, record the SS specification in the description field and in logic_trace
-#         - Apply SS 316 pricing if available in the valid materials list
-
-#       Examples:
-#         Drawing text: "W8x13 SS"     → material_size: "W8X13",    description includes "(SS 316)"
-#         Drawing text: "SS GRATING"   → material_size: "GRATING",  description includes "(SS 316)"  
-#         Drawing text: "SS LADDER"    → material_size: per ladder detail, description includes "(SS 316)"
-
-#       Rule: Strip "SS" prefix/suffix from shape names before matching against VALID MATERIALS LIST.
-  
-
-#     ------------------------------------------------------------
-#     STEP 4 — AGGREGATION
-#     ------------------------------------------------------------
-
-#     Group identical materials together.
-
-#     For each material:
-#     Compute:
-#     - quantity
-#     - total_linear_feet
-#     - total_bolts (if applicable)
-#     - total_weld_inches (if applicable)
-#     - total_holes (if applicable)
-
-#     ------------------------------------------------------------
-#     STEP 5 — LOGIC TRACE
-#     ------------------------------------------------------------
-
-#     For each material entry:
-#     Explain briefly:
-#     • Where it was found
-#     • Which symbol triggered it
-#     • Which dimension used
-#     • Which rule applied
-#     • What formula executed
-
-#     Be technical and concise.
-
-#     ------------------------------------------------------------
-
-#     STRICT EXCLUSION LIST — Do NOT include these in the BOM:
-#     - Concrete rebar (#3, #4, #5, #8 bars, hoops, dowels, T-bars embedded in concrete)
-#     - Hardware items (screens, mesh, tamper guards, hatches, hasps, padlocks)
-#     - Pipe fittings and flanges (these are mechanical, not structural steel)
-#     - Grating (unless it is structural platform grating specified as steel fabrication)
-#     - Anchors and anchor bolts (these are concrete embeds, not steel fabrication)
-#     - Any item described as "GALV" that is a manufactured product (guardrail post hardware, manufacturer's standard items)
-
-#     INCLUDE ONLY:
-#     - Structural steel shapes: W, C, MC, L, HSS, PL(Ex. 1/4" PL), pipe sections specified by size
-#     - Flat bar (FB) used as plates or connection elements
-#     - Threaded rod used as structural bracing or tie rods
-#     - Stair stringers, base plates, closure plates that are fabricated steel
-
-#     ------------------------------------------------------------
-
-#     ### FINAL OUTPUT STRUCTURE
-
-#     Return STRICT JSON only:
-
-#     {{
-#     "final_bill_of_materials": [
-#         {{
-#         "description": "Beam at Grid A",
-#         "material_size": "HSS5X5X5/16",
-#         "quantity": 4,
-#         "total_linear_feet": 73.16,
-#         "logic_trace": "Found 4 columns at grids B-2, C-2."
-#         "source_sheet": "ST8",
-#         "source_symbol": "105/ST8"
-#         }},
-#         {{
-#         "description": "5/8\" DIA. ANCHOR ROD",
-#         "material_size": "ROD5/8",
-#         "quantity": 22,
-#         "total_linear_feet": 33.0,
-#         "logic_trace": "Hex-1 shear wall 13'-10\". Spacing 16\" O.C. → 11 bolts * 2 walls."
-#         "source_sheet": "ST3",
-#         "source_symbol": "105/ST3"
-#         }}
-#     ]
-#     }}
-#     ------------------------------------------------------------
-#     STEP 6 — TRACEABILITY METADATA
-#     ------------------------------------------------------------
-
-#     Each material entry must include traceability fields:
-
-#     • source_sheet → the drawing sheet where the calculation was performed
-#     • source_symbol → the plan symbol or detail reference that triggered the material
-
-#     Use the CURRENT DRAWING SHEET variable for source_sheet.
-
-#     If multiple symbols contributed to the material, use the primary symbol that initiated the calculation.
-#     ------------------------------------------------------------
-#     ### STRICT RULES
-
-#     • No markdown
-#     • No explanation outside JSON
-#     • No hallucinated materials
-#     • All math must be explicit in logic_trace
-#     • Use feet for linear length
-#     • Round bolts UP
-#     • Preserve fractions if present
-
-#     You are executing structural estimation logic.
-#     Not summarizing.
-#     Not guessing.
-#     Compute precisely.
-#     """
-#     return prompt
-
-def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, sheet_number: str):
+def prompt_extract_floor_plan_keywords():
+    return """You are reading a structural engineering floor plan.
+Your job is to extract schedule reference codes that need definition lookup.
+
+INCLUDE:
+- Short schedule/spec codes like: SC-6A, FS7.0, FC2.0, MW-8A, MC-1, CP-4, CW-12
+- These follow patterns like: 2-3 letters + optional number/decimal
+- They appear as text labels near structural elements
+
+DO NOT INCLUDE:
+- Detail callout bubbles with slash: 2/S201, 5/S-3.2, A/S503
+- Symbol letters inside triangles/diamonds/circles: A, B, C, R, Q, P, N
+- Dimensions: 15'-0", T.O.F=93'-4"
+- General notes: TYP, SEE ARCH, BLOCK-OUT, SLOPE SLAB
+- Grid lines: J, H, G, F, E, D, C (single letters at drawing border)
+
+Return ONLY a flat JSON array of unique strings. No explanation.
+Example: ["SC-6A", "FS7.0", "FC2.0", "MW-8A", "MC-1", "CP-4", "CW-12"]
+If nothing found return: []"""
+
+def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, sheet_number: str,SHEET_DEFINITIONS: str = "[]"):
     """
     Accepts the list of dictionaries returned by Neo4j (graph_data).
     Each symbol dict contains:
@@ -1854,6 +1191,26 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, s
       These drive CASE C (beams), CASE D (columns), CASE E (lintels), and any
       material label that appears on the plan without a callout bubble.
 
+    SOURCE 3 — SHEET DEFINITIONS (schedules, notes, rules from this sheet + global structural specs):
+      All schedule tables and keyed notes extracted from this sheet and stored in the
+      knowledge graph. These define text marks you may see written directly on the plan
+      — marks like CW1, CW3, MW1, F11, MJ1 that are NOT inside callout bubbles.
+
+      When you see a text label on the plan (e.g. "CW1" on a wall, "MJ1" at a door jamb),
+      look it up in the SHEET DEFINITIONS below to find its specification.
+      
+      Also included are GLOBAL structural specifications extracted from the project's
+      general notes pages (concrete strengths, steel grades, bolt standards, etc.).
+      Use these to validate or resolve any material spec that is not explicitly called
+      out on the floor plan itself.
+
+      Use this data to:
+      - Resolve wall marks (CW1 → 24" thick, 13'-0" height, #6 AT 6" O.C.)
+      - Resolve footing/note references (F11 → concrete lintel spec)
+      - Resolve any mark that matches a schedule row ID below
+
+      SHEET DEFINITIONS:
+
     You are EXECUTING STRUCTURAL ESTIMATION LOGIC across both sources
     to produce a complete Final Bill of Materials.
 
@@ -1880,6 +1237,9 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, s
 
     CURRENT DRAWING SHEET: {sheet_number}
 
+    SHEET DEFINITIONS (schedules & notes for this sheet):
+    {SHEET_DEFINITIONS}
+
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     STEP 1 — INVENTORY EVERY SYMBOL ON THE PLAN
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1890,8 +1250,8 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, s
     2. For each symbol note:
       - Its text_content (e.g. "3/S3-01", "hex-1")
       - Whether it has a linked_definition (YES / NO)
-      - How many times this SAME symbol appears on the plan
-        (count identical text_content values in the list → this is N, your multiplier)
+      - Its occurrence_count field — this is N, your multiplier.
+        This has been pre-computed for you. Use it directly. Do NOT recount from the list.
 
     N is the OCCURRENCE COUNT for that symbol. Every metric you compute gets multiplied by N.
 
@@ -1912,6 +1272,12 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, s
     If no dimension is visible → note "dimension not found" and fall through
     to grid-span estimation or flag as "field measure required".
 
+    CRITICAL: You MUST output a separate BOM row for EVERY item in 
+      linked_definition.BOM. Do NOT skip PL, L, or FB items. Even if you 
+      read a visual label (e.g. MC6X15.1) for the rails — output BOTH the 
+      visual item AND all definition items. They are different components 
+      of the same assembly.
+
     PASS B — DIRECT MATERIAL LABEL SCAN (critical — do not skip):
     Independently scan the entire image for material labels written directly on members.
     These appear WITHOUT a callout bubble — just text alongside a structural member.
@@ -1930,6 +1296,10 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, s
 
     These direct-label materials are NOT in DETECTED_SYMBOLS — they come purely from
     your visual read of the image. Do not skip them.
+
+    IMPORTANT: PASS B is strictly for material labels written directly on members
+    WITHOUT any callout bubble. Do NOT use PASS B to re-extract materials that 
+    are already defined in linked_definition.BOM — those come from CASE A.
 
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     STEP 3 — LENGTH RESOLUTION  (strict priority order)
@@ -2012,18 +1382,21 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, s
     CASE B — SHEAR WALL / SPACING RULE (hex symbol)
     ─────────────────────────────────────────
 
-    linked_definition contains a spacing rule e.g. "5/8\" bolt @ 16\" O.C."
+    The linked_definition.Rows may contain a mixed schedule row with wood, nails, and an anchor bolt spec together.
+    Ignore everything except the anchor bolt — find any field whose key contains "ANCHOR" and "BOLT", parse it.
+
+    Extract from that field:
+      - diameter → e.g. "5/8\" DIA" → material_size = ROD5/8
+      - spacing  → e.g. "@ 16\" O.C." → spacing_in = 16
+      - embed    → e.g. "MIN EMBED 4\"" → bolt_length_ft = 4/12
 
     Formula:
       wall_length_in = wall_length_ft × 12
       bolt_count_per_wall = ceil(wall_length_in / spacing_in) + 1
-      total_bolts = bolt_count_per_wall × N_walls × N_symbols
-
-      total_linear_feet (for rod) = total_bolts × bolt_length_ft
-      (use 1.5 ft per bolt unless a different embed length is stated)
-
-      total_holes = total_bolts × 2  (through sill plate + mudsill typically)
-      total_weld_inches = 0  (anchor rods are not welded)
+      total_bolts = bolt_count_per_wall × N
+      total_linear_feet = total_bolts × bolt_length_ft
+      total_holes = total_bolts × 2
+      total_weld_inches = 0
 
     ─────────────────────────────────────────
     CASE C — BEAMS (W-shape or HSS horizontal)
@@ -2135,6 +1508,11 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, s
     SS PREFIX:
       "W8x13 SS" or "SS W8x13" → material_size = "W8X13", description includes "(SS 316)"
       Strip "SS" from the shape name before matching. "SS" is a finish flag, not a shape type.
+    
+    CRITICAL: PL items from linked_definition.BOM must keep their exact item_name as material_size.
+    Do NOT normalize PL1/4X4X10 to FB or any other type.
+    PL = Plate. FB = Flat Bar. These are different products.
+    If the item_name starts with PL → material_size must start with PL.
 
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     STEP 7 — AGGREGATION
@@ -2173,7 +1551,6 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, s
     Do NOT include:
       • Concrete rebar (#3, #4, #5, hoops, dowels, T-bars in concrete)
       • Hardware (screws, hinges, hasps, padlocks, screens, mesh)
-      • Anchor bolts embedded/cast in concrete
       • Manufactured products (guardrail post caps, standard hardware items)
       • Grating (unless fabricated structural steel platform grating)
 
@@ -2276,6 +1653,10 @@ There are only two valid symbol types:
    Output exactly: hex-N
    Examples: hex-1, hex-42
 
+2) CIRCLE with a number inside:
+   Output exactly: cir-N
+   Examples: cir-1, cir-7
+
 2) DETAIL CALLOUT — circle on top of triangle with:
    - Top half: a number or alphanumeric label
    - Bottom half: a sheet reference
@@ -2305,3 +1686,41 @@ Rules:
   Example: "2/S3-01" must NEVER become "2/S53-01" — the 5 does not exist.
 """
 
+
+def prompt_bom_validator(bom_json: str) -> str:
+    return f"""
+You are a structural steel estimator reviewing a raw Bill of Materials for quality control.
+
+Your job: review each item and decide KEEP or DROP.
+
+DROP an item if it meets ANY ONE of these conditions:
+
+1. DUPLICATE — exact same material_size + quantity + source_symbol appears elsewhere.
+   Keep the symbol-detected version (cir-N, hex-N, detail ref), drop "Schedule:" version.
+
+2. NON-STRUCTURAL — item is CLEARLY one of:
+   - Concrete rebar: #3, #4, #5, #6 bars, DBA BAR, hoops, dowels
+   - Insulation, ceramic fiber, wood, concrete products
+   - Manufactured hardware: screws, hinges, padlocks, mesh, screens
+   - Non-fabricated grating
+
+3. HALLUCINATION — material_size contains zero numeric characters AND
+   description gives no real spec.
+
+NEVER DROP these regardless of context:
+- L shapes (angles) — always structural connection hardware
+- PL (plates) — always structural
+- W, C, MC, HSS, FB shapes — always structural
+- ROD with dimensions (e.g. ROD3/4) — structural tie rod
+- Any item with a valid detail ref source_symbol (e.g. 7/S-3.2)
+
+KEEP everything else including items flagged "not in valid materials list".
+
+For duplicates: keep symbol-detected version (cir-N, hex-N, detail ref),
+drop the schedule-scan version (source_symbol starts with "Schedule:").
+
+RAW BOM (0-indexed):
+{bom_json}
+
+Return your decision for EVERY item. Index must match exactly.
+"""

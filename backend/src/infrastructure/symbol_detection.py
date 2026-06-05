@@ -17,7 +17,6 @@ from src.workflow.workflows.estimation.prompt import SYMBOL_OCR_PROMPT
 
 logger = setup_logger(__name__)
 load_dotenv()
-llm_flash = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", temperature=0)
 DINO_MODEL_ID = "IDEA-Research/grounding-dino-base"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -56,6 +55,9 @@ def clean_output(text: str) -> str:
     text = re.sub(r'(?<=/)[5s](?=\d)', 'S', text, flags=re.IGNORECASE)
     # Valid patterns
     
+    if re.match(r"^cir-\d+$", text, re.IGNORECASE):
+        return text
+    
     if re.match(r"^hex-\d+$", text, re.IGNORECASE):
         return text
     
@@ -71,7 +73,7 @@ class SymbolData(BaseModel):
     bbox: List[int]
 
 
-def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
+def detect_and_read_symbols(image_path: str, output_dir: str,llm_flash) -> List[Dict]:
     """
     1. Uses Grounding DINO to find symbols (Hexagons, Circles).
     2. Crops them.
@@ -88,14 +90,6 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
         logger.error(f"Image load failed | image={image_path} | error={str(e)}")
         raise
 
-    # 1. DINO Detection
-    # text_prompt = """
-    # hexagon. triangle.
-    # hexagon. circular callout. detail bubble.
-    # detail callout bubble with number and sheet reference.
-    # circle divided horizontally with number on top and sheet code on bottom.
-    # detail reference bubble small.
-    # """
     text_prompt = "circle. hexagon. triangle."
 
     inputs = _processor(images=image, text=text_prompt, return_tensors="pt").to(DEVICE)
@@ -117,18 +111,31 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
         target_sizes=[image.size[::-1]]
     )[0]
 
+    scored=sorted(
+        zip(results["scores"],results["labels"], results["boxes"]),
+        key=lambda x:x[0].item(),
+        reverse=True
+    )
+    kept_boxes=[]
+    for score,label,box in scored:
+        coords=list(map(int,box.tolist()))
+        if any(_boxes_overlap(coords,kept[2],threshold=0.4)for kept in kept_boxes):
+            logger.debug(f"Pre-OCR dedup: dropped score={score:.2f} bbox={coords}")
+            continue
+        kept_boxes.append((score.item(), label, coords))
+    logger.info(f"Pre-OCR dedup | raw={len(scored)} → kept={len(kept_boxes)}")
+
+
     detected_symbols = []
     os.makedirs(output_dir, exist_ok=True)
 
     # 2. Process Detections
-    for i, (score, label, box) in enumerate(zip(results["scores"], results["labels"], results["boxes"])):
-        if score.item() < 0.15: continue
-        logger.debug(
-            f"Detection accepted | index={i} | label={label} | score={score.item():.2f}"
-        )
+    for i, (score, label, coords) in enumerate(kept_boxes):
+        if score < 0.15: continue
+        logger.debug(f"Detection accepted | index={i} | label={label} | score={score:.2f}")
 
         # Get Coords
-        x1, y1, x2, y2 = map(int, box.tolist())
+        x1, y1, x2, y2 = coords
         img_area = image.width * image.height
         bbox_area = (x2 - x1) * (y2 - y1)
         if bbox_area > 0.5 * img_area:

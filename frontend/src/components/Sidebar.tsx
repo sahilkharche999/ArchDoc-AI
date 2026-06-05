@@ -1,10 +1,12 @@
 import {Badge} from "./ui/badge";
 import {Button} from "./ui/button";
-import {Plus} from "lucide-react";
 import {useEffect, useState} from "react";
 import {useNavigate} from "react-router-dom";
 import {Project} from "../types/project";
 import logo from '../assets/dax_mfg_logo.jpeg'
+import {Plus, Settings, LogOut} from "lucide-react";
+import {useAuth} from "../app/context/AuthContext";
+
 
 interface SidebarProps {
     onNewEstimation: () => void;
@@ -15,11 +17,14 @@ interface SidebarProps {
 export function Sidebar({onNewEstimation, selectedProjectId, onSelectProject}: SidebarProps) {
     const [projects, setProjects] = useState<Project[]>([]);
     const navigate = useNavigate();
+    const { token ,logout} = useAuth();
     useEffect(() => {
+        if (!token) return; 
         const fetchProjects = async () => {
             try {
                 const res = await fetch(
-                    `${import.meta.env.VITE_API_URL}/api/v1/projects/`
+                    `${import.meta.env.VITE_API_URL}/api/v1/projects/`,
+                    { headers: { "Authorization": `Bearer ${token}` } }
                 );
                 const data = await res.json();
                 setProjects(data.projects || []);
@@ -38,7 +43,7 @@ export function Sidebar({onNewEstimation, selectedProjectId, onSelectProject}: S
         const sources: EventSource[] = [];
 
         projects.forEach((project) => {
-            if (project.status !== "processing") return;
+            if (project.status !== "processing" && project.status !== "pending") return;
 
             const es = new EventSource(
                 `${import.meta.env.VITE_API_URL}/api/v1/jobs/${project.job_id}/stream`
@@ -46,13 +51,15 @@ export function Sidebar({onNewEstimation, selectedProjectId, onSelectProject}: S
 
             es.onmessage = (event) => {
                 const data = JSON.parse(event.data);
+                const isFinalComplete = data.step === "agent_4_merger" && data.status === "completed";
+                const isFailed = data.status === "failed";
 
-                if (data.status === "completed") {
+                if (isFinalComplete || isFailed) {
                     // ✅ update that project only
                     setProjects(prev =>
                         prev.map(p =>
                             p.job_id === project.job_id
-                                ? {...p, status: "completed"}
+                                ? {...p, status: isFailed ? "failed" : "completed"}
                                 : p
                         )
                     );
@@ -72,13 +79,25 @@ export function Sidebar({onNewEstimation, selectedProjectId, onSelectProject}: S
             sources.forEach(s => s.close());
         };
     }, [projects]);
-
+    
+    useEffect(() => {
+        if (!token) return; 
+        const refresh = () => {
+            fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects/`,{ headers: { "Authorization": `Bearer ${token}` }})
+                .then(r => r.json())
+                .then(data => setProjects(data.projects || []))
+                .catch(() => {},
+            );
+        };
+        window.addEventListener("job-completed", refresh);
+        return () => window.removeEventListener("job-completed", refresh);
+    }, []);
 
     const renameProject = async (jobId: string, newName: string) => {
         try {
             await fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects/${jobId}`, {
                 method: "PUT",
-                headers: {"Content-Type": "application/json"},
+                headers: {"Content-Type": "application/json","Authorization": `Bearer ${token}`},
                 body: JSON.stringify({new_name: newName})
             });
 
@@ -97,7 +116,8 @@ export function Sidebar({onNewEstimation, selectedProjectId, onSelectProject}: S
     const deleteProject = async (jobId: string) => {
         try {
             await fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects/${jobId}`, {
-                method: "DELETE"
+                method: "DELETE",
+                headers: { "Authorization": `Bearer ${token}` }
             });
         } catch (err) {
             console.error("Delete failed", err);
@@ -143,14 +163,34 @@ export function Sidebar({onNewEstimation, selectedProjectId, onSelectProject}: S
             </div>
 
             {/* New Estimation Button */}
-            <div className="p-4 border-t border-sidebar-border">
+            {/* Bottom Buttons */}
+            <div className="p-4 border-t border-sidebar-border space-y-2">
                 <Button
-                    onClick={onNewEstimation}
+                    onClick={() => onNewEstimation()}
                     className="w-full bg-accent hover:bg-accent/90 text-accent-foreground"
                 >
                     <Plus className="w-4 h-4 mr-2"/>
                     New Estimation
                 </Button>
+               <div className="flex gap-2">
+                    <Button
+                        onClick={() => navigate("/settings")}
+                        className="flex-1 text-sidebar-foreground bg-sidebar-accent/30 border border-sidebar-border hover:bg-sidebar-accent cursor-pointer"
+                    >
+                        <Settings className="w-4 h-4 mr-2"/>
+                        Settings
+                    </Button>
+                    <Button
+                        onClick={() => {
+                            logout();
+                            navigate("/login");
+                        }}
+                        className="flex-1 text-red-400 bg-red-500/10 border border-red-400/30 hover:bg-red-500/20 cursor-pointer"
+                    >
+                        <LogOut className="w-4 h-4 mr-2"/>
+                        Logout
+                    </Button>
+                </div>
             </div>
         </div>
     );
@@ -218,6 +258,10 @@ function ProjectItem({
                     className={
                         status === "completed"
                             ? "bg-emerald-500/20 text-emerald-400 text-xs"
+                            : status === "failed"
+                            ? "bg-red-500/20 text-red-400 text-xs"
+                            : status === "pending"
+                            ? "bg-yellow-500/20 text-yellow-400 text-xs"
                             : "bg-accent/20 text-accent text-xs"
                     }
                 >

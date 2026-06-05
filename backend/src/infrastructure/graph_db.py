@@ -22,7 +22,7 @@ class ConstructionGraph:
         self.driver = GraphDatabase.driver(uri, auth=("", ""))
 
         # Initialize Embedding Model
-        self.embedder = GoogleGenerativeAIEmbeddings(model="gemini-embedding-001")
+        self._api_key = None
 
         # Create Vector Index (Run this once)
         self.create_vector_index()
@@ -30,6 +30,13 @@ class ConstructionGraph:
     def close(self):
         logger.info("Closing Neo4j driver")
         self.driver.close()
+
+    def _get_embedder(self):
+        key = self._api_key or os.getenv("GOOGLE_API_KEY")
+        return GoogleGenerativeAIEmbeddings(
+            model="gemini-embedding-001",
+            google_api_key=key
+        )
 
     def create_vector_index(self):
         """Creates a Vector Index on Definition nodes if it doesn't exist (Memgraph syntax)."""
@@ -57,13 +64,13 @@ class ConstructionGraph:
 ):
         try:
             # 1. Create unique ID
-            rule_id = f"{section_name}_{rule_number}"
+            rule_id = f"{project_id}_{section_name}_{page_num}_{rule_number}"
 
             # 2. Create embedding text
             description = f"{section_name} Rule {rule_number}: {text}"
 
             # 3. Generate embedding
-            vector = self.embedder.embed_query(description)
+            vector = self._get_embedder().embed_query(description)
 
             query = """
             MERGE (proj:Project {id: $project_id})
@@ -126,8 +133,11 @@ class ConstructionGraph:
             description = f"Symbol: {symbol}. Schedule: {schedule_name}. Row: {row_json}"
             # 2. Generate Vector
             logger.debug("Generating embedding vector")
-            vector = self.embedder.embed_query(description)
+            vector = self._get_embedder().embed_query(description)
             logger.debug(f"Vector generated | dim={len(vector)}")
+
+            # Unique ID = schedule name + symbol (prevents collision)
+            unique_id = f"{schedule_name}:{symbol}"
 
             # 3. Cypher Query
             query = """
@@ -137,8 +147,9 @@ class ConstructionGraph:
 
             MERGE (p)-[:BELONGS_TO]->(proj)
 
-            MERGE (d:Definition {id: $symbol, project: $project_id})
+            MERGE (d:Definition {id: $unique_id, project: $project_id})
             SET d:Schedule
+            SET d.symbol = $symbol
             SET d.schedule_name = $schedule_name
             SET d.name = $schedule_name
             SET d.columns = $columns
@@ -154,6 +165,7 @@ class ConstructionGraph:
                 session.run(
                     query,
                     project_id=project_id,
+                    unique_id=unique_id,
                     schedule_name=schedule_name,
                     symbol=symbol,
                     row_json=row_json,
@@ -194,7 +206,7 @@ class ConstructionGraph:
 
         # 2. Generate Vector
         try:
-            vector = self.embedder.embed_query(description)
+            vector = self._get_embedder().embed_query(description)
         except Exception as e:
             logger.error(
                 f"Embedding failed | project_id={project_id} | detail_key={detail_key} | error={str(e)}"
@@ -271,6 +283,51 @@ class ConstructionGraph:
 )
         raise Exception("Neo4j write failed after retries")
     
+    def get_all_definitions_for_sheet(self,project_id:str,sheet_number:str):
+        """
+        Returns all Definition nodes (schedules, rules, notes) found on a specific sheet.
+        Used by Agent 4 to resolve text marks like CW1, F11, MW1 that aren't inside symbols.
+        """
+        query="""
+        MATCH (n:Definition)-[:FOUND_ON]->(p:Sheet)
+        WHERE n.project= $project_id AND p.sheet_number= $sheet_number
+        RETURN
+        n.id as ID,
+        n.title as Title,
+        n.text as Text,
+        n.row as Rows,
+        n.columns as Columns,
+        n.schedule_name as ScheduleName,
+        n.bom as BOM,
+        labels(n) as Labels
+        """
+        with self.driver.session() as session:
+            result=session.run(
+                query=query,
+                project_id=project_id,
+                sheet_number=sheet_number
+            )
+            records = list(result)
+            definitions=[]
+            for r in records:
+                data = r.data()
+                if data.get("BOM"):
+                    try:
+                        data["BOM"] = json.loads(data["BOM"])
+                    except:
+                        pass
+                if data.get("Rows"):
+                    try:
+                        data["Rows"] = json.loads(data["Rows"])
+                    except:
+                        pass
+                definitions.append(data)
+
+            logger.debug(
+            f"Sheet definitions fetched | project={project_id} | sheet={sheet_number} | count={len(definitions)}"
+              )
+            return definitions
+
     # --- RETRIEVAL (GraphRAG Search) ---
 
     def semantic_search(self, query_text, project_id, sheet_number=None, limit=3):
@@ -278,7 +335,7 @@ class ConstructionGraph:
         Finds the most relevant Definition (Rule/Detail) for a given query.
         """
         try:
-            vector = self.embedder.embed_query(query_text)
+            vector = self._get_embedder().embed_query(query_text)
         except Exception as e:
             logger.error(
                 f"Embedding failed | project_id={project_id} | query={query_text} | error={str(e)}"
@@ -332,22 +389,38 @@ class ConstructionGraph:
             logger.debug(f"Search results count | count={len(final)}")
             return final
    
-    def get_definition_by_id(self, detail_id, project_id):
-        query = """
-        MATCH (n:Definition)
-        WHERE n.id = $id AND n.project = $project_id
-        RETURN 
-            n.id as ID,
-            n.title as Title,
-            n.row as Rows,
-            n.columns as Columns,
-            n.bom as BOM,
-            n.fabrication as fabrication
-        LIMIT 1
-        """
+    def get_definition_by_id(self, detail_id, project_id,sheet_number=None):
+
+        if sheet_number:
+            query = """
+            MATCH (n:Definition)-[:FOUND_ON]->(p:Sheet)
+            WHERE n.id = $id AND n.project = $project_id
+            AND p.sheet_number = $sheet_number
+            RETURN 
+                n.id as ID,
+                n.title as Title,
+                n.row as Rows,
+                n.columns as Columns,
+                n.bom as BOM,
+                n.fabrication as fabrication
+            LIMIT 1
+            """
+        else:
+            query = """
+            MATCH (n:Definition)
+            WHERE n.id = $id AND n.project = $project_id
+            RETURN 
+                n.id as ID,
+                n.title as Title,
+                n.row as Rows,
+                n.columns as Columns,
+                n.bom as BOM,
+                n.fabrication as fabrication
+            LIMIT 1
+            """
 
         with self.driver.session() as session:
-            result = session.run(query, id=detail_id, project_id=project_id)
+            result = session.run(query, id=detail_id, project_id=project_id,sheet_number=sheet_number)
             record = result.single()
 
             if not record:
@@ -363,5 +436,29 @@ class ConstructionGraph:
                 data["fabrication"] = json.loads(data["fabrication"])
 
             return data
-
+    
+    def get_all_details_for_project(self, project_id: str):
+        query = """
+        MATCH (n:Definition:Detail)
+        WHERE n.project = $project_id
+        RETURN
+            n.id as ID,
+            n.title as Title,
+            n.bom as BOM,
+            n.sheet as Sheet
+        """
+        with self.driver.session() as session:
+            result = session.run(query, project_id=project_id)
+            records = list(result)
+            details = []
+            for r in records:
+                data = r.data()
+                if data.get("BOM"):
+                    try:
+                        data["BOM"] = json.loads(data["BOM"])
+                    except:
+                        pass
+                details.append(data)
+            return details
+    
 graph_db = ConstructionGraph()
