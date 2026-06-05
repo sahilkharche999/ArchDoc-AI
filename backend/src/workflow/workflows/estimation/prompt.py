@@ -43,8 +43,13 @@ Extract any information that would help a steel estimator understand:
 
 ### OUTPUT:
 Return as TextRulesExtraction schema:
-- sections: group related rules under a section_name (e.g. "CONCRETE", "STRUCTURAL STEEL", "BOLTS AND FASTENERS")
-- general_notes: project-wide notes that don't fit a specific section
+- sections: list of objects with:
+    - section_name: string (e.g. "CONCRETE", "STRUCTURAL STEEL")
+    - rules: list of objects with:
+        - rule_number: integer
+        - text: string (the rule content)
+- general_notes: list of strings for project-wide notes
+
 """
 # ------ AGENT 2. PROCESS PLAN ---------
 def prompt_for_node_process_plans():
@@ -1136,6 +1141,25 @@ def prompt_for_extract_single_detail(group_title: str, group_detail_id: str):
 
 # ------ AGENT 4. AGENT MERGER ----------
 
+def prompt_extract_floor_plan_keywords():
+    return """You are reading a structural engineering floor plan.
+Your job is to extract schedule reference codes that need definition lookup.
+
+INCLUDE:
+- Short schedule/spec codes like: SC-6A, FS7.0, FC2.0, MW-8A, MC-1, CP-4, CW-12
+- These follow patterns like: 2-3 letters + optional number/decimal
+- They appear as text labels near structural elements
+
+DO NOT INCLUDE:
+- Detail callout bubbles with slash: 2/S201, 5/S-3.2, A/S503
+- Symbol letters inside triangles/diamonds/circles: A, B, C, R, Q, P, N
+- Dimensions: 15'-0", T.O.F=93'-4"
+- General notes: TYP, SEE ARCH, BLOCK-OUT, SLOPE SLAB
+- Grid lines: J, H, G, F, E, D, C (single letters at drawing border)
+
+Return ONLY a flat JSON array of unique strings. No explanation.
+Example: ["SC-6A", "FS7.0", "FC2.0", "MW-8A", "MC-1", "CP-4", "CW-12"]
+If nothing found return: []"""
 
 def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, sheet_number: str,SHEET_DEFINITIONS: str = "[]"):
     """
@@ -1167,15 +1191,6 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, s
       These drive CASE C (beams), CASE D (columns), CASE E (lintels), and any
       material label that appears on the plan without a callout bubble.
 
-      ⚠️ CRITICAL: SHEET DEFINITIONS are ONLY for resolving text marks you read 
-      DIRECTLY on the drawing (like CW-16 on a wall, MC-3 on a column) that are 
-      NOT already present in DETECTED_SYMBOLS above.
-
-      If a symbol appears in DETECTED_SYMBOLS (e.g. cir-1, cir-4, hex-3), its 
-      definition is ALREADY resolved via linked_definition. Do NOT look it up 
-      again in SHEET DEFINITIONS. Do NOT produce a BOM item from SHEET DEFINITIONS 
-      for anything that was already handled by a DETECTED_SYMBOL.
-
     SOURCE 3 — SHEET DEFINITIONS (schedules, notes, rules from this sheet + global structural specs):
       All schedule tables and keyed notes extracted from this sheet and stored in the
       knowledge graph. These define text marks you may see written directly on the plan
@@ -1195,7 +1210,6 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, s
       - Resolve any mark that matches a schedule row ID below
 
       SHEET DEFINITIONS:
-      {SHEET_DEFINITIONS}
 
     You are EXECUTING STRUCTURAL ESTIMATION LOGIC across both sources
     to produce a complete Final Bill of Materials.
@@ -1236,8 +1250,8 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, s
     2. For each symbol note:
       - Its text_content (e.g. "3/S3-01", "hex-1")
       - Whether it has a linked_definition (YES / NO)
-      - How many times this SAME symbol appears on the plan
-        (count identical text_content values in the list → this is N, your multiplier)
+      - Its occurrence_count field — this is N, your multiplier.
+        This has been pre-computed for you. Use it directly. Do NOT recount from the list.
 
     N is the OCCURRENCE COUNT for that symbol. Every metric you compute gets multiplied by N.
 
@@ -1258,6 +1272,12 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, s
     If no dimension is visible → note "dimension not found" and fall through
     to grid-span estimation or flag as "field measure required".
 
+    CRITICAL: You MUST output a separate BOM row for EVERY item in 
+      linked_definition.BOM. Do NOT skip PL, L, or FB items. Even if you 
+      read a visual label (e.g. MC6X15.1) for the rails — output BOTH the 
+      visual item AND all definition items. They are different components 
+      of the same assembly.
+
     PASS B — DIRECT MATERIAL LABEL SCAN (critical — do not skip):
     Independently scan the entire image for material labels written directly on members.
     These appear WITHOUT a callout bubble — just text alongside a structural member.
@@ -1277,10 +1297,9 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, s
     These direct-label materials are NOT in DETECTED_SYMBOLS — they come purely from
     your visual read of the image. Do not skip them.
 
-    IMPORTANT: Do NOT include items from the numbered-circle callouts (cir-1, 
-      cir-2... etc.) in PASS B. Those are already handled via DETECTED_SYMBOLS.
-      PASS B is strictly for unlabelled member text — W-shapes, HSS, plates with 
-      leader arrows that have NO circle/hexagon callout.
+    IMPORTANT: PASS B is strictly for material labels written directly on members
+    WITHOUT any callout bubble. Do NOT use PASS B to re-extract materials that 
+    are already defined in linked_definition.BOM — those come from CASE A.
 
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     STEP 3 — LENGTH RESOLUTION  (strict priority order)
@@ -1363,18 +1382,21 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, s
     CASE B — SHEAR WALL / SPACING RULE (hex symbol)
     ─────────────────────────────────────────
 
-    linked_definition contains a spacing rule e.g. "5/8\" bolt @ 16\" O.C."
+    The linked_definition.Rows may contain a mixed schedule row with wood, nails, and an anchor bolt spec together.
+    Ignore everything except the anchor bolt — find any field whose key contains "ANCHOR" and "BOLT", parse it.
+
+    Extract from that field:
+      - diameter → e.g. "5/8\" DIA" → material_size = ROD5/8
+      - spacing  → e.g. "@ 16\" O.C." → spacing_in = 16
+      - embed    → e.g. "MIN EMBED 4\"" → bolt_length_ft = 4/12
 
     Formula:
       wall_length_in = wall_length_ft × 12
       bolt_count_per_wall = ceil(wall_length_in / spacing_in) + 1
-      total_bolts = bolt_count_per_wall × N_walls × N_symbols
-
-      total_linear_feet (for rod) = total_bolts × bolt_length_ft
-      (use 1.5 ft per bolt unless a different embed length is stated)
-
-      total_holes = total_bolts × 2  (through sill plate + mudsill typically)
-      total_weld_inches = 0  (anchor rods are not welded)
+      total_bolts = bolt_count_per_wall × N
+      total_linear_feet = total_bolts × bolt_length_ft
+      total_holes = total_bolts × 2
+      total_weld_inches = 0
 
     ─────────────────────────────────────────
     CASE C — BEAMS (W-shape or HSS horizontal)
@@ -1486,6 +1508,11 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, s
     SS PREFIX:
       "W8x13 SS" or "SS W8x13" → material_size = "W8X13", description includes "(SS 316)"
       Strip "SS" from the shape name before matching. "SS" is a finish flag, not a shape type.
+    
+    CRITICAL: PL items from linked_definition.BOM must keep their exact item_name as material_size.
+    Do NOT normalize PL1/4X4X10 to FB or any other type.
+    PL = Plate. FB = Flat Bar. These are different products.
+    If the item_name starts with PL → material_size must start with PL.
 
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     STEP 7 — AGGREGATION
@@ -1524,7 +1551,6 @@ def prompt_for_agent_4_merger(DETECTED_SYMBOLS: str, valid_materials_str: str, s
     Do NOT include:
       • Concrete rebar (#3, #4, #5, hoops, dowels, T-bars in concrete)
       • Hardware (screws, hinges, hasps, padlocks, screens, mesh)
-      • Anchor bolts embedded/cast in concrete
       • Manufactured products (guardrail post caps, standard hardware items)
       • Grating (unless fabricated structural steel platform grating)
 
@@ -1667,23 +1693,30 @@ You are a structural steel estimator reviewing a raw Bill of Materials for quali
 
 Your job: review each item and decide KEEP or DROP.
 
-DROP an item if ANY of the following are true:
-1. DUPLICATE — another item in the list covers the same material from the same drawing,
-   just found via a different source path (e.g. one via "cir-4" and another via 
-   "Schedule: UNKNOWN Row 4" with identical or near-identical description/size/quantity).
-   When duplicates exist: keep the one with source_symbol matching cir-N, hex-N, or a 
-   detail ref (e.g. 3/S3-01). Drop the "Schedule: UNKNOWN" version.
+DROP an item if it meets ANY ONE of these conditions:
 
-2. NON-STRUCTURAL — item is insulation, ceramic fiber, concrete, rebar, hardware,
-   screws, mesh, grating (non-fabricated), or any manufactured non-steel product.
+1. DUPLICATE — exact same material_size + quantity + source_symbol appears elsewhere.
+   Keep the symbol-detected version (cir-N, hex-N, detail ref), drop "Schedule:" version.
 
-3. HALLUCINATION — material_size has no numeric characters, or description is vague
-   with no real material spec, or quantity is 0 or negative.
+2. NON-STRUCTURAL — item is CLEARLY one of:
+   - Concrete rebar: #3, #4, #5, #6 bars, DBA BAR, hoops, dowels
+   - Insulation, ceramic fiber, wood, concrete products
+   - Manufactured hardware: screws, hinges, padlocks, mesh, screens
+   - Non-fabricated grating
 
-KEEP everything else — including items flagged "not in valid materials list".
-Do NOT drop items just because they are unusual or unfamiliar steel sizes.
+3. HALLUCINATION — material_size contains zero numeric characters AND
+   description gives no real spec.
 
-For duplicates: always keep the symbol-detected version (cir-N, hex-N, detail ref),
+NEVER DROP these regardless of context:
+- L shapes (angles) — always structural connection hardware
+- PL (plates) — always structural
+- W, C, MC, HSS, FB shapes — always structural
+- ROD with dimensions (e.g. ROD3/4) — structural tie rod
+- Any item with a valid detail ref source_symbol (e.g. 7/S-3.2)
+
+KEEP everything else including items flagged "not in valid materials list".
+
+For duplicates: keep symbol-detected version (cir-N, hex-N, detail ref),
 drop the schedule-scan version (source_symbol starts with "Schedule:").
 
 RAW BOM (0-indexed):

@@ -4,6 +4,8 @@ import {Card, CardContent} from "./ui/card";
 import {Document, Page, pdfjs} from "react-pdf";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
+import { useAuth } from "../app/context/AuthContext";
+
 
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
@@ -11,7 +13,7 @@ interface ProcessingViewProps {
     jobId: string;
     filePath: string;
     onComplete: (result: any) => void;
-    onFailed?:()=>void;
+    onFailed?: (error?: string) => void; 
 }
 
 const steps = [
@@ -43,6 +45,7 @@ export function ProcessingView({jobId, filePath, onComplete, onFailed}: Processi
     const [hasFailed, setHasFailed] = useState(false);
     const [planBoxIndices, setPlanBoxIndices] = useState<Set<number>>(new Set());
     const [planRedBoxIndex, setPlanRedBoxIndex] = useState<number | null>(null);
+    const { logout, token } = useAuth();
 
 
     
@@ -74,7 +77,7 @@ export function ProcessingView({jobId, filePath, onComplete, onFailed}: Processi
             if (data.status === "failed") {
                 es.close();
                 setHasFailed(true);
-                onFailed?.();
+                onFailed?.(data.error);
                 return;
             }
             if (data.step === "hitl_review") {
@@ -86,6 +89,16 @@ export function ProcessingView({jobId, filePath, onComplete, onFailed}: Processi
                 }
                 if (data.data.type === "classify_review") {
                     setPageMapEdits(data.data.page_map);
+                }
+                if (data.data.type === "bbox_review") {
+                // process_text is done, process_plans is active
+                    setCompletedSteps([0, 1]);
+                    setActiveStep(2);
+                }
+                if (data.data.type === "section_review") {
+                    // process_text and process_plans are done, process_details is active
+                    setCompletedSteps([0, 1, 2]);
+                    setActiveStep(3);
                 }
 
                 setHitlData(data.data);
@@ -132,11 +145,13 @@ export function ProcessingView({jobId, filePath, onComplete, onFailed}: Processi
 
             if (status === "completed" && step === "agent_4_merger"){
                 es.close();
+                window.dispatchEvent(new Event("job-completed"));
 
                 setLoadingResult(true);
 
                 const res = await fetch(
-                    `${import.meta.env.VITE_API_URL}/api/v1/jobs/${jobId}/result`
+                    `${import.meta.env.VITE_API_URL}/api/v1/jobs/${jobId}/result`,
+                    { headers: { "Authorization": `Bearer ${token}` } }
                 );
 
                 const result = await res.json();
@@ -146,9 +161,6 @@ export function ProcessingView({jobId, filePath, onComplete, onFailed}: Processi
      };
     es.onerror = (err) => {
         console.error("SSE error:", err);
-        // setHasFailed(true);
-        // es.close();
-        // onFailed?.();
     }
 
     return () => {
@@ -234,7 +246,15 @@ export function ProcessingView({jobId, filePath, onComplete, onFailed}: Processi
                 const b = hitlData.bboxes[idx];
                 const canvas = canvasRef.current!;
                 const displayScale = canvas.width / (canvas.getBoundingClientRect().width || canvas.width);
-                const btnSize = Math.max(30, 20 * displayScale);
+                const boxW = b.x2 - b.x1;
+                const boxH = b.y2 - b.y1;
+                const btnSize = Math.max(
+                    20,
+                    Math.min(
+                        Math.max(30, 20 * displayScale),
+                        Math.floor(Math.min(boxW, boxH) * 0.25)
+                    )
+                );
 
                 ctx.strokeStyle = "#22c55e";
                 ctx.lineWidth   = 3;
@@ -252,20 +272,22 @@ export function ProcessingView({jobId, filePath, onComplete, onFailed}: Processi
                 ctx.textAlign = "center";
                 ctx.textBaseline = "middle";
                 ctx.fillText("×", btnX + btnSize / 2, btnY + btnSize / 2);
+                const showPButton = hitlData?.type === "bbox_review";
 
                 // P button — always visible top-left, blue when flagged, grey when not
-                ctx.fillStyle = planBoxIndices.has(idx) ? "#3b82f6" : "#6b7280";
-                ctx.fillRect(b.x1, b.y1, btnSize, btnSize);
-                ctx.fillStyle = "white";
-                ctx.font = `bold ${btnSize * 0.75}px sans-serif`;
-                ctx.textAlign = "center";
-                ctx.textBaseline = "middle";
-                ctx.fillText("P", b.x1 + btnSize / 2, b.y1 + btnSize / 2);
+                if (showPButton) {
+                    ctx.fillStyle = planBoxIndices.has(idx) ? "#3b82f6" : "#6b7280";
+                    ctx.fillRect(b.x1, b.y1, btnSize, btnSize);
+                    ctx.fillStyle = "white";
+                    ctx.font = `bold ${btnSize * 0.75}px sans-serif`;
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "middle";
+                    ctx.fillText("P", b.x1 + btnSize / 2, b.y1 + btnSize / 2);
+                }               
             }
         }
         const displayScale = canvas.width / (canvas.getBoundingClientRect().width || canvas.width);
-        const btnSize = Math.max(30, 20 * displayScale);  // at least 30px in image space
-
+       
         // red = user-drawn boxes (stored in image-pixel space)
         ctx.strokeStyle = "#ef4444";
         ctx.lineWidth   = 2;
@@ -277,7 +299,12 @@ export function ProcessingView({jobId, filePath, onComplete, onFailed}: Processi
             ctx.fillStyle   = "rgba(239,68,68,0.1)";
             ctx.strokeRect(box.x, box.y, box.width, box.height);
             ctx.fillRect  (box.x, box.y, box.width, box.height);
-
+            const btnSize = Math.max(20,Math.min(
+                Math.max(30, 20 * displayScale),
+                Math.floor(Math.min(box.width, box.height) * 0.25)
+            )
+            );
+            
             const btnX = box.x + box.width - btnSize;
             const btnY = box.y;
             ctx.fillStyle = "#ef4444";
@@ -289,10 +316,12 @@ export function ProcessingView({jobId, filePath, onComplete, onFailed}: Processi
             ctx.fillText("X", btnX + btnSize / 2, btnY + btnSize / 2);
 
             // P button top-left on red boxes
+            if (hitlData?.type === "bbox_review"){
             ctx.fillStyle = planRedBoxIndex === ridx ? "#3b82f6" : "#6b7280";
             ctx.fillRect(box.x, box.y, btnSize, btnSize);
             ctx.fillStyle = "white";
             ctx.fillText("P", box.x + btnSize / 2, box.y + btnSize / 2);
+            }            
 
             ctx.strokeStyle = "#ef4444";
             ctx.fillStyle = "rgba(239,68,68,0.1)";
@@ -346,21 +375,25 @@ function handleCanvasClick(e: React.MouseEvent<HTMLCanvasElement>) {
     const imgPos = toImageCoords(pos.x, pos.y);
     const canvas = canvasRef.current!;
     const displayScale = canvas.width / (canvas.getBoundingClientRect().width || canvas.width);
-    const btnSize = Math.max(60, 40 * displayScale);
+    const baseBtnSize = Math.max(20, Math.max(30, 20 * displayScale))
 
     // ── RED BOX P BUTTON FIRST (before green, so large red boxes aren't blocked) ──
     for (let ridx = 0; ridx < bboxes.length; ridx++) {
         const box = bboxes[ridx];
+        const btnSize = Math.max(20, Math.min(baseBtnSize, Math.floor(Math.min(box.width, box.height) * 0.25)));
         if (imgPos.x >= box.x && imgPos.x <= box.x + btnSize &&
             imgPos.y >= box.y && imgPos.y <= box.y + btnSize) {
+            if (hitlData?.type === "bbox_review") {    
             setPlanRedBoxIndex(prev => (prev === ridx ? null : ridx));
             setPlanBoxIndices(new Set());
+            }
             return;
         }
     }
 
     // ── RED BOX X BUTTON ──
     const indexToDelete = bboxes.findIndex(box => {
+        const btnSize = Math.max(20, Math.min(baseBtnSize, Math.floor(Math.min(box.width, box.height) * 0.25)));
         const btnX = box.x + box.width - btnSize;
         const btnY = box.y;
         return imgPos.x >= btnX && imgPos.x <= btnX + btnSize &&
@@ -379,14 +412,17 @@ function handleCanvasClick(e: React.MouseEvent<HTMLCanvasElement>) {
             const b = hitlData.bboxes[idx];
             const pX = b.x1;
             const pY = b.y1;
+            const btnSize = Math.max(20, Math.min(baseBtnSize, Math.floor(Math.min(b.x2 - b.x1, b.y2 - b.y1) * 0.25)));
             if (imgPos.x >= pX && imgPos.x <= pX + btnSize &&
                 imgPos.y >= pY && imgPos.y <= pY + btnSize) {
+                if (hitlData?.type === "bbox_review"){
                 setPlanBoxIndices(prev => {
                     const next = new Set(prev);
                     next.has(idx) ? next.delete(idx) : next.add(idx);
                     return next;
                 });
                 if (planRedBoxIndex !== null) setPlanRedBoxIndex(null);
+            }
                 return;
             }
             const btnX = b.x1 + (b.x2 - b.x1) - btnSize;
@@ -435,7 +471,7 @@ function handleCanvasClick(e: React.MouseEvent<HTMLCanvasElement>) {
             const survivingMineruBoxes = (hitlData?.bboxes ?? []).filter((_, idx) => !deletedMineruIndices.has(idx));
             await fetch(`${import.meta.env.VITE_API_URL}/api/v1/jobs/${jobId}/hitl`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json","Authorization": `Bearer ${token}` },
                 body: JSON.stringify({
                 corrected_bboxes: [...survivingMineruBoxes.map(b => ({x1:b.x1,y1:b.y1,x2:b.x2,y2:b.y2})), ...toBackendBboxes()],
                 deleted_mineru_bboxes: Array.from(deletedMineruIndices).map(idx => hitlData.bboxes[idx]),
@@ -515,7 +551,7 @@ function handleCanvasClick(e: React.MouseEvent<HTMLCanvasElement>) {
                             setIsSubmitting(true);
                             await fetch(`${import.meta.env.VITE_API_URL}/api/v1/jobs/${jobId}/hitl`, {
                                 method: "POST",
-                                headers: { "Content-Type": "application/json" },
+                                headers: { "Content-Type": "application/json","Authorization": `Bearer ${token}` },
                                 body: JSON.stringify({ corrected_page_map: pageMapEdits })
                             });
                             setIsSubmitting(false);
@@ -595,7 +631,7 @@ function handleCanvasClick(e: React.MouseEvent<HTMLCanvasElement>) {
                                     setIsSubmitting(true);
                                     await fetch(`${import.meta.env.VITE_API_URL}/api/v1/jobs/${jobId}/hitl`, {
                                         method: "POST",
-                                        headers: { "Content-Type": "application/json" },
+                                        headers: { "Content-Type": "application/json" ,"Authorization": `Bearer ${token}`},
                                         body: JSON.stringify({ 
                                             corrected_bboxes: [],
                                             deleted_mineru_bboxes: []

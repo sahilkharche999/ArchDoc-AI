@@ -18,7 +18,7 @@ def create_job(job_id: str, file_name: str):
             job_id,
             file_name,
             file_name,
-            "processing",
+            "pending",
             datetime.now().strftime("%Y-%m-%d")
         ))
         conn.commit()

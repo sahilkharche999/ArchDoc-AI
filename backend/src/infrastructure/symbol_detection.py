@@ -17,7 +17,6 @@ from src.workflow.workflows.estimation.prompt import SYMBOL_OCR_PROMPT
 
 logger = setup_logger(__name__)
 load_dotenv()
-llm_flash = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", temperature=0)
 DINO_MODEL_ID = "IDEA-Research/grounding-dino-base"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -74,7 +73,7 @@ class SymbolData(BaseModel):
     bbox: List[int]
 
 
-def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
+def detect_and_read_symbols(image_path: str, output_dir: str,llm_flash) -> List[Dict]:
     """
     1. Uses Grounding DINO to find symbols (Hexagons, Circles).
     2. Crops them.
@@ -91,14 +90,6 @@ def detect_and_read_symbols(image_path: str, output_dir: str) -> List[Dict]:
         logger.error(f"Image load failed | image={image_path} | error={str(e)}")
         raise
 
-    # 1. DINO Detection
-    # text_prompt = """
-    # hexagon. triangle.
-    # hexagon. circular callout. detail bubble.
-    # detail callout bubble with number and sheet reference.
-    # circle divided horizontally with number on top and sheet code on bottom.
-    # detail reference bubble small.
-    # """
     text_prompt = "circle. hexagon. triangle."
 
     inputs = _processor(images=image, text=text_prompt, return_tensors="pt").to(DEVICE)

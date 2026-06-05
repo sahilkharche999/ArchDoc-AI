@@ -22,16 +22,13 @@ from src.workflow.workflows.estimation.prompt import (
 from src.workflow.common.schemas import (
     IngestionOutput ,FinalEstimation
     )
+
 from src.logger import setup_logger
 from src.workflow.common.schemas import DetailExtraction, DetailGroup, DetailMap
 
 logger = setup_logger(__name__)
 
 load_dotenv()
-llm_pro = ChatGoogleGenerativeAI(model="gemini-3-pro-preview")
-llm_25_pro = ChatGoogleGenerativeAI(model="gemini-2.5-pro") 
-llm_flash = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
-client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
 
 def _bbox_overlap_ratio(b1, b2):
@@ -46,7 +43,7 @@ def _bbox_overlap_ratio(b1, b2):
     b1_area = (b1[2] - b1[0]) * (b1[3] - b1[1])
     return inter / b1_area if b1_area > 0 else 0.0
 
-def map_page_layout(pdf_layout_path: str, json_path: str, images_dir: str):
+def map_page_layout(pdf_layout_path: str, json_path: str, images_dir: str,llm_flash):
     """
     Uses VLM to look at the full page layout and group items into 'Detail Units'.
     Returns a list of DetailGroup objects.
@@ -94,8 +91,16 @@ def map_page_layout(pdf_layout_path: str, json_path: str, images_dir: str):
         logger.error(f"[Layout] Mapping failed | error={str(e)}")
         return []
     
+def get_llms(api_key: str = None):
+    key = api_key or os.getenv("GOOGLE_API_KEY")
+    return (
+        ChatGoogleGenerativeAI(model="gemini-3.1-pro-preview", google_api_key=key),
+        ChatGoogleGenerativeAI(model="gemini-2.5-pro", google_api_key=key),
+        ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", google_api_key=key),
+    )
 
-def classify_image_as_plan(image_path):
+
+def classify_image_as_plan(image_path,llm_flash):
 
     prompt =prompt_for_classify_image_as_plan_detail()
 
@@ -133,7 +138,7 @@ def classify_image_as_plan(image_path):
         logger.error(f"   ! classify_image_as_plan failed: {e}")
         return "INDEPENDENT_DETAIL" 
 
-def extract_single_detail(group: DetailGroup, images_dir: str, temp_plan_like_details: list,temp_dependent_detail_images:list, sheet_number: str, page_num: int):
+def extract_single_detail(group: DetailGroup, images_dir: str, temp_plan_like_details: list,temp_dependent_detail_images:list, sheet_number: str, page_num: int,llm_pro,llm_flash):
     """
     Analyzes a SINGLE detail group (specific images + text) to get the BOM.
     Used in the Floor plan agent 
@@ -153,7 +158,7 @@ def extract_single_detail(group: DetailGroup, images_dir: str, temp_plan_like_de
         if not os.path.exists(full_path):
             continue
 
-        img_type = classify_image_as_plan(full_path)
+        img_type = classify_image_as_plan(full_path,llm_flash)
 
         if img_type == "PLAN_VIEW":
             plan_images.append(full_path)
@@ -331,7 +336,7 @@ def normalize_detail_key(detail_id: str, sheet_number: str) -> str:
     # Use current sheet_number instead
     return f"{label}/{sheet_number}"
 
-def get_sheet_number(image_path: str,sheet_prefix: str = "") -> str:
+def get_sheet_number(image_path: str,sheet_prefix: str = "",llm_pro=None) -> str:
     """
     Get the sheet number present in the bottom right corner,used in storing the section detail information
     """
@@ -424,7 +429,7 @@ def normalize_pdf_orientation(input_pdf, output_pdf, page_angles):
 
     return output_pdf
 
-def classify_group_image(image_path):
+def classify_group_image(image_path,llm_flash):
     prompt = prompt_for_node_process_plans()
 
     msg = HumanMessage(content=[
@@ -502,7 +507,7 @@ def _enrich_symbols(raw_symbols, project_id, sheet_number):
     return enriched
 
 
-def _run_symbol_estimation(img_path, enriched_symbols,group_title="", group_detail_id=""):
+def _run_symbol_estimation(img_path, enriched_symbols,group_title="", group_detail_id="",llm_pro=None):
     """Shared helper: call LLM with enriched symbols and return BOM items."""
     dependency_context = """
              ### ADDITIONAL CONTEXT — RESOLVED DEPENDENCIES
@@ -544,7 +549,7 @@ def _bom_item_to_material_dict(item):
         d["qty_rule"] = f"FIXED: {d.get('quantity', 1)}"
     return d
 
-def _extract_text_references_as_symbols(img_path: str, sheet_number: str) -> list:
+def _extract_text_references_as_symbols(img_path: str, sheet_number: str,llm_flash) -> list:
 
     prompt = """You are reading a structural engineering detail drawing.
             Your job is to find ALL detail references in this image — both graphical and text-based.
@@ -629,6 +634,7 @@ def _extract_text_references_as_symbols(img_path: str, sheet_number: str) -> lis
         return []
     
 def _process_dependent_details(items, detail_library,sheet_number, config, state):
+    llm_pro, llm_25_pro, llm_flash = get_llms(state.get("gemini_api_key"))
     project_id = config["configurable"]["thread_id"]
     for plan in items:
         img_paths  = plan["image_path"] if isinstance(plan["image_path"], list) else [plan["image_path"]]
@@ -638,7 +644,7 @@ def _process_dependent_details(items, detail_library,sheet_number, config, state
             logger.debug(f"Processing dependent detail: {img_path}")
             
 
-            raw_symbols = _extract_text_references_as_symbols(img_path, plan_sheet)
+            raw_symbols = _extract_text_references_as_symbols(img_path, plan_sheet,llm_flash)
             if not raw_symbols:
                 logger.info(
                     f"No references found (graphical or text) — skipping | "
@@ -656,12 +662,12 @@ def _process_dependent_details(items, detail_library,sheet_number, config, state
                 img_path,
                 enriched,
                 group_title=plan.get("title", ""),
-                group_detail_id=plan.get("detail_id", "")
+                group_detail_id=plan.get("detail_id", ""),
+                llm_pro=llm_pro
             )
             
 
             if detail_result and detail_result.materials:
-                # normalized = [_bom_item_to_material_dict(m) for m in bom_items] 
                 normalized=[m.model_dump() for m in detail_result.materials]
                 inherited_materials = []
                 for sym in enriched:

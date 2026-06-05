@@ -6,11 +6,14 @@ import {BOMTable} from "./BOMTable";
 import {TraceabilityView} from "./TraceabilityView";
 import {DashboardHeader} from "./DashboardHeader";
 import {SummaryTab} from "./SummaryTab";
-import {DollarSign, Package, Weight} from "lucide-react";
+import {DollarSign, Package, Weight,Download} from "lucide-react";
 import {BOMItem} from "../types/bom"
 import {Document, Page, pdfjs} from "react-pdf";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
+import * as XLSX from 'xlsx';
+import { useAuth } from "../app/context/AuthContext";
+
 
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
@@ -18,6 +21,8 @@ pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/b
 interface EstimationDashboardProps {
     projectId?: string | null;
     bomData: BOMItem[];
+    unreferencedDetails:any[];
+    message?: string;
 }
 
 
@@ -31,7 +36,7 @@ function formatDate(dateString: string) {
     })
 }
 
-export function EstimationDashboard({projectId, bomData}: EstimationDashboardProps) {
+export function EstimationDashboard({projectId, bomData,unreferencedDetails = [],message}: EstimationDashboardProps) {
     const [pricePerLb, setPricePerLb] = useState(0);
     const [fabricationMarkup, setFabricationMarkup] = useState(0);
     const [galvanizing, setGalvanizing] = useState(false);
@@ -43,10 +48,11 @@ export function EstimationDashboard({projectId, bomData}: EstimationDashboardPro
     const containerRef = useRef<HTMLDivElement | null>(null);
     const [scale, setScale] = useState(1);
     const [zoom, setZoom] = useState(0.4);
+    const { logout, token } = useAuth();
     const activeTab = searchParams.get("tab") || "summary";
     useEffect(() => {
         if (!projectId) return;
-        fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects/${projectId}`)
+        fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects/${projectId}`,{ headers: { "Authorization": `Bearer ${token}` }})
             .then(res => res.json())
             .then(data => {
                 console.log("projectMeta:", data);
@@ -78,6 +84,44 @@ export function EstimationDashboard({projectId, bomData}: EstimationDashboardPro
             setScale(newScale);
         }
     }
+    async function handleSaveAndExport() {
+    // Save to server
+    if (projectId) {
+        await fetch(`${import.meta.env.VITE_API_URL}/api/v1/jobs/${projectId}/bom`, {
+            method: "PATCH",
+            headers: {"Content-Type": "application/json" ,"Authorization": `Bearer ${token}`},
+            body: JSON.stringify({ bom: editableBom })
+        });
+    }
+
+    // Export to Excel
+    const rows = editableBom.map(item => {
+        const totalWeight = item.total_linear_feet * item.quantity * item.lb_per_ft;
+        const totalCost = totalWeight * item.charge_per_lb;
+        return {
+            "Description": item.description,
+            "Material Size": item.material_size,
+            "Quantity": item.quantity,
+            "Total Linear Ft": item.total_linear_feet,
+            "Lb/Ft": item.lb_per_ft,
+            "Total Weight (lbs)": parseFloat(totalWeight.toFixed(2)),
+            "Price/Lb": item.charge_per_lb,
+            "Total Cost ($)": parseFloat(totalCost.toFixed(2)),
+            "Total Bolts": item.total_bolts,
+            "Total Holes": item.total_holes,
+            "Weld Inches": item.total_weld_inches,
+            "Source Sheet": item.source_sheet,
+            "Source Symbol": item.source_symbol,
+            "Logic Trace": item.logic_trace,
+        };
+    });
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "BOM");
+    const fileName = `DAX_BOM_${projectMeta?.name || projectId || "export"}.xlsx`;
+    XLSX.writeFile(wb, fileName);
+}
 
 
     // Calculate totals
@@ -144,30 +188,109 @@ export function EstimationDashboard({projectId, bomData}: EstimationDashboardPro
 
                 {/* Tabs */}
                 <Tabs value={activeTab} onValueChange={(val) => setSearchParams({ tab: val })} className="w-full">
-                    <TabsList className="grid w-full max-w-2xl grid-cols-3">
+                    <TabsList className="grid w-full max-w-2xl grid-cols-4">
                         <TabsTrigger value="summary">Summary</TabsTrigger>
                         <TabsTrigger value="bom">Detailed BOM</TabsTrigger>
                         <TabsTrigger value="trace">Traceability</TabsTrigger>
+                        <TabsTrigger value="untracked">Untracked</TabsTrigger>
                     </TabsList>
 
                     <TabsContent value="summary" className="space-y-4">
-                        <SummaryTab
-                            bomData={editableBom}
-                            baseCost={baseCost}
-                            fabricationCost={fabricationCost}
-                            galvanizingCost={galvanizingCost}
-                            fabricationMarkup={fabricationMarkup}
-                            pricePerLb={pricePerLb}
-                        />
+                        {message && (
+                            <div className="rounded-lg border border-yellow-300 bg-yellow-50 px-4 py-3">
+                                <p className="text-sm text-yellow-800">{message}</p>
+                                {unreferencedDetails.length > 0 && (
+                                    <p className="text-xs text-yellow-700 mt-1">
+                                        {unreferencedDetails.length} section detail(s) were found — see the Untracked tab.
+                                    </p>
+                                )}
+                            </div>
+                        )}
+                        {editableBom.length > 0 ? (
+                            <SummaryTab
+                                bomData={editableBom}
+                                baseCost={baseCost}
+                                fabricationCost={fabricationCost}
+                                galvanizingCost={galvanizingCost}
+                                fabricationMarkup={fabricationMarkup}
+                                pricePerLb={pricePerLb}
+                            />
+                        ) : (
+                            <Card>
+                                <CardContent className="p-6 text-center text-sm text-muted-foreground">
+                                    No materials to summarize for this document.
+                                </CardContent>
+                            </Card>
+                        )}
                     </TabsContent>
 
                     <TabsContent value="bom">
+                        <div className="flex justify-end mb-3">
+                            <button
+                                onClick={handleSaveAndExport}
+                                className="flex items-center gap-2 px-4 py-2 bg-accent text-accent-foreground rounded-lg text-sm hover:bg-accent/90 cursor-pointer"
+                            >
+                                <Download className="w-4 h-4" />
+                                Save & Export Excel
+                            </button>
+                        </div>
                         <BOMTable bomData={editableBom} setEditableBom={setEditableBom} pricePerLb={pricePerLb}/>
                     </TabsContent>
 
 
                     <TabsContent value="trace">
                         <TraceabilityView bomData={editableBom}/>
+                    </TabsContent>
+
+                    <TabsContent value="untracked">
+                        <Card>
+                            <CardContent className="p-4">
+                                <p className="text-sm text-muted-foreground mb-4">
+                                    Section details extracted by Agent 3 but not referenced in the floor plan by Agent 4. Verify these manually.
+                                </p>
+                                {unreferencedDetails.length === 0 ? (
+                                    <p className="text-sm text-green-600">All details were referenced — no untracked items.</p>
+                                ) : (
+                                    <table className="w-full text-sm">
+                                        <thead>
+                                            <tr className="border-b">
+                                                <th className="text-left py-2">Detail ID</th>
+                                                <th className="text-left py-2">Title</th>
+                                                <th className="text-left py-2">Materials</th>
+                                                <th className="text-left py-2">Sheet</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {unreferencedDetails
+                                            .filter(detail => {
+                                                const bom = typeof detail.BOM === "string"
+                                                    ? JSON.parse(detail.BOM)
+                                                    : detail.BOM || [];
+                                                return bom.length > 0;
+                                            }).map((detail, idx) => {
+                                                const bom = typeof detail.BOM === "string" 
+                                                    ? JSON.parse(detail.BOM) 
+                                                    : detail.BOM || [];
+                                                return (
+                                                    <tr key={idx} className="border-b hover:bg-muted/50">
+                                                        <td className="py-2 font-mono text-orange-600">{detail.ID}</td>
+                                                        <td className="py-2">{detail.Title || "—"}</td>
+                                                        <td className="py-2">
+                                                            {bom.map((m: any, i: number) => (
+                                                                <span key={i} className="inline-block bg-orange-100 text-orange-800 text-xs px-2 py-0.5 rounded mr-1 mb-1">
+                                                                    {m.item_name}
+                                                                </span>
+                                                            ))}
+                                                        </td>
+                                                        <td className="py-2 text-muted-foreground">{detail.Sheet || "—"}</td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                )}
+                            </CardContent>
+                        </Card>
                     </TabsContent>
                 </Tabs>
                 {/* PDF Preview */}

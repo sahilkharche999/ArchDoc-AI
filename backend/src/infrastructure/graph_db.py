@@ -22,7 +22,7 @@ class ConstructionGraph:
         self.driver = GraphDatabase.driver(uri, auth=("", ""))
 
         # Initialize Embedding Model
-        self.embedder = GoogleGenerativeAIEmbeddings(model="gemini-embedding-001")
+        self._api_key = None
 
         # Create Vector Index (Run this once)
         self.create_vector_index()
@@ -30,6 +30,13 @@ class ConstructionGraph:
     def close(self):
         logger.info("Closing Neo4j driver")
         self.driver.close()
+
+    def _get_embedder(self):
+        key = self._api_key or os.getenv("GOOGLE_API_KEY")
+        return GoogleGenerativeAIEmbeddings(
+            model="gemini-embedding-001",
+            google_api_key=key
+        )
 
     def create_vector_index(self):
         """Creates a Vector Index on Definition nodes if it doesn't exist (Memgraph syntax)."""
@@ -57,13 +64,13 @@ class ConstructionGraph:
 ):
         try:
             # 1. Create unique ID
-            rule_id = f"{section_name}_{rule_number}"
+            rule_id = f"{project_id}_{section_name}_{page_num}_{rule_number}"
 
             # 2. Create embedding text
             description = f"{section_name} Rule {rule_number}: {text}"
 
             # 3. Generate embedding
-            vector = self.embedder.embed_query(description)
+            vector = self._get_embedder().embed_query(description)
 
             query = """
             MERGE (proj:Project {id: $project_id})
@@ -126,7 +133,7 @@ class ConstructionGraph:
             description = f"Symbol: {symbol}. Schedule: {schedule_name}. Row: {row_json}"
             # 2. Generate Vector
             logger.debug("Generating embedding vector")
-            vector = self.embedder.embed_query(description)
+            vector = self._get_embedder().embed_query(description)
             logger.debug(f"Vector generated | dim={len(vector)}")
 
             # Unique ID = schedule name + symbol (prevents collision)
@@ -199,7 +206,7 @@ class ConstructionGraph:
 
         # 2. Generate Vector
         try:
-            vector = self.embedder.embed_query(description)
+            vector = self._get_embedder().embed_query(description)
         except Exception as e:
             logger.error(
                 f"Embedding failed | project_id={project_id} | detail_key={detail_key} | error={str(e)}"
@@ -328,7 +335,7 @@ class ConstructionGraph:
         Finds the most relevant Definition (Rule/Detail) for a given query.
         """
         try:
-            vector = self.embedder.embed_query(query_text)
+            vector = self._get_embedder().embed_query(query_text)
         except Exception as e:
             logger.error(
                 f"Embedding failed | project_id={project_id} | query={query_text} | error={str(e)}"
@@ -429,5 +436,29 @@ class ConstructionGraph:
                 data["fabrication"] = json.loads(data["fabrication"])
 
             return data
-
+    
+    def get_all_details_for_project(self, project_id: str):
+        query = """
+        MATCH (n:Definition:Detail)
+        WHERE n.project = $project_id
+        RETURN
+            n.id as ID,
+            n.title as Title,
+            n.bom as BOM,
+            n.sheet as Sheet
+        """
+        with self.driver.session() as session:
+            result = session.run(query, project_id=project_id)
+            records = list(result)
+            details = []
+            for r in records:
+                data = r.data()
+                if data.get("BOM"):
+                    try:
+                        data["BOM"] = json.loads(data["BOM"])
+                    except:
+                        pass
+                details.append(data)
+            return details
+    
 graph_db = ConstructionGraph()

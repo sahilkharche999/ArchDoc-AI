@@ -13,7 +13,8 @@ export interface BOMItem {
     total_weld_inches: number;
     logic_trace: string;
     source_drawing: string;
-    source_sheet:string
+    source_sheet:string;
+    source_symbol:string
 }
 
 export interface BOMTableProps {

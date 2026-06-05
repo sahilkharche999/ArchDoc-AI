@@ -3,26 +3,21 @@ import cv2
 import json
 import re
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
 from langgraph.types import interrupt
-from src.workflow.common.schemas import DetailExtraction
 import pdfplumber
 from pypdf import PdfReader, PdfWriter
 from src.workflow.common.state import ProjectState
 from src.workflow.common.schemas import (
     DrawingTypeResponse,
     FinalEstimation,
-    TextRulesExtraction,
     IngestionOutput,
-    BOMValidation
     )
 from src.workflow.workflows.estimation.prompt import (
     prompt_for_node_classify_pages,
     prompt_for_node_process_plans,
-    prompt_node_process_text_rules,
     prompt_for_agent_4_merger,
-    prompt_bom_validator
+    prompt_extract_floor_plan_keywords
     )
 from src.workflow.common.utils import (
     map_page_layout,
@@ -40,7 +35,8 @@ from src.workflow.common.utils import (
     enrich_bom_with_pricing,
     normalize_detail_id,
     normalize_detail_key,
-    _bbox_overlap_ratio
+    _bbox_overlap_ratio,
+    get_llms
     )
 
 from src.infrastructure.graph_db import graph_db
@@ -50,11 +46,6 @@ from src.db.update_jobs_status import update_job_status,update_job_progress
 
 logger = setup_logger(__name__)
 load_dotenv()
-# --- 1. SETUP MODELS ---
-llm_pro = ChatGoogleGenerativeAI(model="gemini-3-pro-preview") 
-llm_25_pro = ChatGoogleGenerativeAI(model="gemini-2.5-pro") 
-llm_flash = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite") 
-
 
 
 # ---  AGENT 0: PAGE CLASSIFY ---
@@ -75,6 +66,7 @@ def node_classify_pages(state: ProjectState):
     pdf_path = state["pdf_path"]
     output_dir=state['output_dir']
     os.makedirs(output_dir, exist_ok=True)
+    _, _, llm_flash = get_llms(state.get("gemini_api_key"))
     
     cache_path = f"{output_dir}/page_map_cache.json"
     if os.path.exists(cache_path):
@@ -152,6 +144,7 @@ def node_process_text_rules(state: ProjectState,config):
     """
     logger.info("--- NODE 1: Processing Text Rules ---")
     text_pages = [p for p, t in state["page_map"].items() if t == "text"]
+    _, _, llm_flash = get_llms(state.get("gemini_api_key"))
 
     if not text_pages:
         logger.info("No text pages found, skipping")
@@ -191,41 +184,7 @@ def node_process_text_rules(state: ProjectState,config):
             logger.error(f"   ! Markdown file not found: {md_file_path}")
             continue
 
-        text_only = re.sub(r'<table>.*?</table>', '', markdown_content, flags=re.DOTALL).strip()
-
-        # 4. Call 1 — summarize text rules
-        if text_only:
-            logger.debug("   > Calling LLM to summarize text rules...")
-            try:
-                prompt = prompt_node_process_text_rules(text_only)
-                msg = HumanMessage(content=prompt)
-                result = llm_flash.with_structured_output(TextRulesExtraction).invoke([msg])
-
-                for section in result.sections:
-                    for rule in section.rules:
-                        graph_db.add_text_rule(
-                            project_id=config["configurable"]["thread_id"],
-                            section_name=section.section_name,
-                            rule_number=rule.rule_number,
-                            text=rule.text,
-                            page_num=page_num,
-                        )
-                        logger.debug(f"   > Graph: Added Rule {rule.rule_number} in section '{section.section_name}'")
-
-                for idx, note in enumerate(result.general_notes or []):
-                    graph_db.add_text_rule(
-                        project_id=config["configurable"]["thread_id"],
-                        section_name="GENERAL_NOTES",
-                        rule_number=idx + 1,
-                        text=note,
-                        page_num=page_num,
-                    )
-                    logger.debug(f"   > Graph: Added general note {idx + 1}")
-
-            except Exception as e:
-                logger.warning(f"   ! Text rule extraction failed on page {page_num} — skipping | error={e}")
-
-        # 5. Call 2..N — process each table image
+        # 4. Call 2..N — process each table image
         if os.path.exists(images_dir):
             image_files = [f for f in os.listdir(images_dir) if f.endswith(('.jpg', '.png'))]
             logger.debug(f"   > Found {len(image_files)} table images to process")
@@ -255,6 +214,7 @@ def node_process_text_rules(state: ProjectState,config):
                             if not primary_key or primary_key in ("•", "-", "*", "UNKNOWN"):
                                 primary_key = str(idx + 1)
 
+                            graph_db._api_key = state.get("gemini_api_key")
                             graph_db.add_schedule_rule(
                                 project_id=config["configurable"]["thread_id"],
                                 schedule_name=result.title or img_file,
@@ -300,6 +260,7 @@ def node_process_plans(state: ProjectState,config):
             - general_rules: Status message indicating graph updates
     """
     logger.info("--- NODE: Agent 2 (Plan Ingestion) ---")
+    llm_pro, llm_25_pro, llm_flash = get_llms(state.get("gemini_api_key"))
     
 
     floor_plan_images = state.get("floor_plan_images", [])   
@@ -339,7 +300,7 @@ def node_process_plans(state: ProjectState,config):
         convert_specific_page_to_png(state["pdf_path"], page_num, page_img_path, dpi=300)
 
     sheet_prefix = state.get("sheet_prefix", "")
-    sheet_info =  get_sheet_number(page_img_path, sheet_prefix=sheet_prefix)
+    sheet_info =  get_sheet_number(page_img_path, sheet_prefix=sheet_prefix,llm_pro=llm_pro)
     sheet_number = sheet_info["normalized"]
     logger.debug(f"Sheet Number: {sheet_number} processing")
     
@@ -635,7 +596,7 @@ def node_process_plans(state: ProjectState,config):
                         if not primary_key or primary_key in ("•", "-", "*", "UNKNOWN"):
                             primary_key = str(idx + 1)
 
-
+                        graph_db._api_key = state.get("gemini_api_key")
                         graph_db.add_schedule_rule(
                             project_id=config["configurable"]["thread_id"],
                             schedule_name=resolved_title,
@@ -683,7 +644,7 @@ def node_process_plans(state: ProjectState,config):
         logger.warning("No plan found — running classify_image_as_plan fallback")
         for img_file in image_files:
             crop_path = os.path.join(images_dir, img_file)
-            img_type = classify_image_as_plan(crop_path)
+            img_type = classify_image_as_plan(crop_path,llm_flash)
             if img_type == "PLAN_VIEW":
                 floor_plan_images.append({"path": crop_path, "sheet": sheet_number, "title": "PLAN VIEW"})
                 break
@@ -726,6 +687,7 @@ def node_process_details(state: ProjectState,config):
     """
     logger.info("--- NODE 3 : Processing Section Details (MinerU + HITL) ---")
     detail_library = state.get("detail_library", {})
+    llm_pro, llm_25_pro, llm_flash = get_llms(state.get("gemini_api_key"))
     temp_plan_like_details = state.get("temp_plan_like_details", [])
     temp_dependent_detail_images = state.get("temp_dependent_details", [])
     sheet_number = ""
@@ -767,7 +729,7 @@ def node_process_details(state: ProjectState,config):
 
         # 3. Extract Sheet Number
         sheet_prefix = state.get("sheet_prefix", "")
-        sheet_info = get_sheet_number(page_img_path,sheet_prefix=sheet_prefix)
+        sheet_info = get_sheet_number(page_img_path,sheet_prefix=sheet_prefix,llm_pro=llm_pro)
         sheet_number = sheet_info["normalized"]
         logger.debug(f"   > Identified Sheet Number: {sheet_number}")
 
@@ -846,10 +808,8 @@ def node_process_details(state: ProjectState,config):
             deleted_mineru_bboxes = resume_value.get("deleted_mineru_bboxes", []) 
             state["current_section_page"]["corrected_bboxes"] = corrected_bboxes
             state["current_section_page"]["status"] = "resumed"
-            logger.info(f"▶️ RESUMED | corrected_bboxes count={len(corrected_bboxes)}")
-        # else:
-
-        #     corrected_bboxes = None
+            logger.info(f" RESUMED | corrected_bboxes count={len(corrected_bboxes)}")
+        
 
         # --- Save corrected crops (same as Agent 2) ---
         if corrected_bboxes:
@@ -949,7 +909,7 @@ def node_process_details(state: ProjectState,config):
                 logger.warning(f"MinerU output missing for page {page_num}.")
             else:
                 logger.debug("   > Running map_page_layout...")
-                detail_groups = map_page_layout(layout_pdf_path, active_json_path, images_dir)
+                detail_groups = map_page_layout(layout_pdf_path, active_json_path, images_dir,llm_flash)
                 for group in detail_groups:
                     original = group.detail_id
                     group.detail_id = normalize_detail_key(group.detail_id,sheet_number=sheet_number)
@@ -967,7 +927,9 @@ def node_process_details(state: ProjectState,config):
                             temp_plan_like_details,
                             temp_dependent_detail_images,
                             sheet_number,
-                            page_num
+                            page_num,
+                            llm_pro,
+                            llm_flash
                         )
 
                         if detail_data:
@@ -978,6 +940,7 @@ def node_process_details(state: ProjectState,config):
                                 "data":  detail_data.model_dump()
                             }
                             detail_dict = detail_data.model_dump()
+                            graph_db._api_key = state.get("gemini_api_key")
                             graph_db.add_detail_bom(
                                 project_id=config["configurable"]["thread_id"],
                                 detail_key=key,
@@ -1006,7 +969,7 @@ def node_process_details(state: ProjectState,config):
                 continue
 
             # Classify the crop: is it a standalone Detail or a dependent one?
-            img_type = classify_image_as_plan(crop_path)
+            img_type = classify_image_as_plan(crop_path,llm_flash)
             logger.debug(f"   > {detail_id} classified as: {img_type}")
 
             if img_type == "IGNORE":
@@ -1039,7 +1002,9 @@ def node_process_details(state: ProjectState,config):
                     temp_plan_like_details=[],   # Agent 2 already handled plan-likes
                     temp_dependent_detail_images=temp_dependent_detail_images,
                     sheet_number=sheet_number,
-                    page_num=page_num
+                    page_num=page_num,
+                    llm_pro=llm_pro,
+                    llm_flash=llm_flash
                 )
 
                 if detail_data:
@@ -1049,6 +1014,7 @@ def node_process_details(state: ProjectState,config):
                         "data":  detail_data.model_dump()
                     }
                     detail_dict = detail_data.model_dump()
+                    graph_db._api_key = state.get("gemini_api_key")
                     graph_db.add_detail_bom(
                         project_id=config["configurable"]["thread_id"],
                         detail_key=detail_key,
@@ -1069,8 +1035,6 @@ def node_process_details(state: ProjectState,config):
         # ---------------------------------------------------------------
         _process_dependent_details(temp_dependent_detail_images, detail_library,sheet_number, config, state)
         _process_plan_like_details(temp_plan_like_details, detail_library,sheet_number, config, state)
-        # temp_dependent_detail_images = []
-        # temp_plan_like_details = []
 
 
     state["current_section_page"] = None
@@ -1114,6 +1078,7 @@ def node_agent_4_merger(state: ProjectState,config):
     
     project_id = config["configurable"]["thread_id"]
     floor_images = state.get("floor_plan_images", [])
+    llm_pro, llm_25_pro, llm_flash = get_llms(state.get("gemini_api_key"))
     
     # Load Excel Options
     excel_path = os.getenv("EXCEL_PATH", "Steel Estimator.xlsx")
@@ -1122,9 +1087,34 @@ def node_agent_4_merger(state: ProjectState,config):
     valid_materials_str = json.dumps(valid_materials)
 
     if not floor_images:
-        logger.error("No floor plans found — marking job as failed")
-        update_job_progress(project_id, "failed", "agent_4_merger")
-        return {"final_bill_of_materials": {"error": "No floor plans found."}}
+        logger.warning("No floor plans found — completing with empty BOM, collecting section details for Untracked")
+
+        job_id = project_id
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+        PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, "../../../"))
+        base_path = os.getenv("BOM_STORAGE_PATH", os.path.join(PROJECT_ROOT, "bom_storage"))
+        os.makedirs(base_path, exist_ok=True)
+        graph_db._api_key = state.get("gemini_api_key")
+        all_stored_details = graph_db.get_all_details_for_project(project_id)
+
+        file_path = os.path.join(base_path, f"{job_id}.json")
+        data = {
+            "job_id": job_id,
+            "bom": [],
+            "unreferenced_details": all_stored_details,
+            "message": "No floor plan was found in this document, so no Bill of Materials could be generated. Any section details detected are listed under the Untracked tab.",
+        }
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            logger.info(f"Empty BOM (no floor plan) saved at {file_path}")
+        except Exception as e:
+            logger.error(f"Failed to save empty BOM | job_id={job_id} | error={str(e)}")
+
+        update_job_status(job_id, "completed")
+        update_job_progress(job_id, "completed", "agent_4_merger")
+
+        return {"final_bill_of_materials": {"message": "No floor plans found.", "bom": [], "unreferenced_details": all_stored_details}}
 
     all_extracted_items = []
     job_id = config["configurable"]["thread_id"]
@@ -1142,7 +1132,7 @@ def node_agent_4_merger(state: ProjectState,config):
         # 1. Run Symbol Detection (DINO + Groq)
         symbol_out_dir = os.path.join(os.path.dirname(img_path), "detected_symbols")
         try:
-            raw_symbols = detect_and_read_symbols(img_path, symbol_out_dir)
+            raw_symbols = detect_and_read_symbols(img_path, symbol_out_dir,llm_flash)
             raw_symbols = [s for s in raw_symbols if s.get("text_content") != "Unknown"]
             logger.debug(f"Here is the Raw symbol we detectd : {raw_symbols}")
         except Exception as e:
@@ -1150,19 +1140,30 @@ def node_agent_4_merger(state: ProjectState,config):
             raw_symbols = []
 
         # 2. PRE-FETCH DEFINITIONS (The Fix)
-    
-        enriched_symbols = []
+        symbol_counts:dict={}
+        for sym in raw_symbols:
+            text = sym.get("text_content", "").upper().strip()
+            if text:
+                symbol_counts[text] = symbol_counts.get(text, 0) + 1
+        logger.info(f"Unique symbols to lookup | count={len(symbol_counts)} | symbols={list(symbol_counts.keys())}")
+
+
+        unique_enriched: dict = {}
+
+
         for sym in raw_symbols:
             logger.info(f"RAW SYMBOL : {sym}")
             query_text = sym.get("text_content", "").strip()
             logger.info(f"query text : {query_text}")
             query_text = query_text.upper()
+            if not query_text or query_text in unique_enriched:
+                 continue
             
             definition = None
 
             if is_detail_ref(query_text):
                 logger.info(f"Using DIRECT LOOKUP for {query_text}")
-
+                graph_db._api_key = state.get("gemini_api_key")
                 definition = graph_db.get_definition_by_id(
                     query_text,
                     project_id
@@ -1173,7 +1174,7 @@ def node_agent_4_merger(state: ProjectState,config):
                 bare_number = m.group(2)
                 prefixed = query_text.upper()
                 logger.info(f"Using SCHEDULE LOOKUP for {query_text} → trying {prefixed} then {bare_number} on sheet {sheet_number}")
-                
+                graph_db._api_key = state.get("gemini_api_key")
                 # Try prefixed first (keyed notes stored as "HEX-24")
                 definition = graph_db.get_definition_by_id(prefixed, project_id, sheet_number=sheet_number)
             
@@ -1184,7 +1185,7 @@ def node_agent_4_merger(state: ProjectState,config):
 
             else:
                 logger.info(f"Using SEMANTIC SEARCH for {query_text}")
-
+                graph_db._api_key = state.get("gemini_api_key")
                 matches = graph_db.semantic_search(
                     query_text,
                     project_id,
@@ -1214,7 +1215,7 @@ def node_agent_4_merger(state: ProjectState,config):
 
                         if any(k in text_blob for k in schedule_keywords) and mat_text:
                             logger.debug(f"    > Resolving Reference: {mat_text}")
-
+                            graph_db._api_key = state.get("gemini_api_key")
                             sub_matches = graph_db.semantic_search(
                                 mat_text,
                                 project_id,
@@ -1237,16 +1238,61 @@ def node_agent_4_merger(state: ProjectState,config):
 
             # Attach the fully enriched definition to the symbol
             sym['linked_definition'] = definition
-            enriched_symbols.append(sym)
-            
-        logger.debug(f"    > Enriched {len(enriched_symbols)} symbols with Graph Data.")
+            sym["occurrence_count"] = symbol_counts[query_text]
+            unique_enriched[query_text] = sym
+
+
+        enriched_symbols = list(unique_enriched.values())
+        logger.info(f"Enriched symbols | unique={len(enriched_symbols)} (was {len(raw_symbols)} with duplicates)")
+
+
+        graph_db._api_key = state.get("gemini_api_key")
 
         sheet_definitions = graph_db.get_all_definitions_for_sheet(project_id, sheet_number)
         logger.debug(f"    > Fetched {len(sheet_definitions)} definitions for sheet {sheet_number}")
-        global_definitions = graph_db.get_all_definitions_for_sheet(project_id, project_id)
-        logger.debug(f"    > Fetched {len(global_definitions)} global definitions")
+        b64 = load_image_base64(img_path)
+
+        try:
+            
+            kw_msg = HumanMessage(content=[
+                {"type": "text", "text": prompt_extract_floor_plan_keywords()},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
+            ])
+            kw_response = llm_flash.invoke([kw_msg])
+            raw_kw = kw_response.content if isinstance(kw_response.content, str) else kw_response.content[0]["text"]
+            raw_kw = raw_kw.strip().replace("```json", "").replace("```", "").strip()
+            keywords = json.loads(raw_kw) if raw_kw else []
+            logger.info(f"Keywords extracted | count={len(keywords)} | keywords={keywords}")
+        except Exception as e:
+            logger.warning(f"Keyword extraction failed, falling back to full load | error={e}")
+            keywords = []
+
+        if keywords:
+            global_definitions = []
+            seen_ids = set()
+            for kw in keywords:
+                try:
+                    matches = graph_db.semantic_search(kw, project_id, sheet_number=None, limit=2)
+                    for m in matches:
+                        mid = m.get("ID", "")
+                        if mid and mid not in seen_ids:
+                            seen_ids.add(mid)
+                            global_definitions.append(m)
+                except Exception as e:
+                    logger.warning(f"Semantic search failed for keyword {kw} | error={e}")
+            logger.info(f"Smart global definitions loaded | count={len(global_definitions)} (was potentially 200+)")
+        else:
+            # Fallback — load all global definitions
+            global_definitions = graph_db.get_all_definitions_for_sheet(project_id, project_id)
+            global_definitions = [
+                d for d in global_definitions
+                if "Rule" not in (d.get("Labels") or [])
+                and (d.get("BOM") or d.get("Rows"))
+            ]
+            logger.info(f"Fallback full global definitions loaded | count={len(global_definitions)}")
+        
         all_definitions = sheet_definitions + global_definitions
-        logger.debug(f"    > Total definitions for LLM: {len(all_definitions)}")
+        logger.debug(f"    > Total definitions for LLM: {len(all_definitions)}")     
         
 
         # 3. ONE-SHOT PROMPT (No ReAct Loop needed anymore!
@@ -1258,7 +1304,7 @@ def node_agent_4_merger(state: ProjectState,config):
             )
 
         # 4. Call LLM (Standard Invoke)
-        b64 = load_image_base64(img_path)
+        
         msg = HumanMessage(content=[
             {"type": "text", "text": system_prompt},
             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
@@ -1297,57 +1343,13 @@ def node_agent_4_merger(state: ProjectState,config):
         filtered.append(item)
 
     all_extracted_items = filtered
-
-    # ── BOM VALIDATION / DEDUP (lightweight LLM pass) 
-    if all_extracted_items:
-        try:
-            bom_for_validation = [
-                {
-                    "index": i,
-                    "description": item.description,
-                    "material_size": item.material_size,
-                    "quantity": item.quantity,
-                    "source_symbol": item.source_symbol,
-                    "logic_trace": item.logic_trace[:120]  # truncate for token efficiency
-                }
-                for i, item in enumerate(all_extracted_items)
-            ]
-
-            val_msg = HumanMessage(content=prompt_bom_validator(
-                json.dumps(bom_for_validation, indent=2)
-            ))
-            validation = llm_flash.with_structured_output(BOMValidation).invoke([val_msg])
-
-            drop_indices = {
-                v.index for v in validation.validated_items
-                if v.action == "drop"
-            }
-
-            before = len(all_extracted_items)
-            all_extracted_items = [
-                item for i, item in enumerate(all_extracted_items)
-                if i not in drop_indices
-            ]
-            logger.info(
-                f"BOM validation: kept {len(all_extracted_items)}/{before} items "
-                f"(dropped {before - len(all_extracted_items)})"
-            )
-            for v in validation.validated_items:
-                if v.action == "drop":
-                    logger.info(f"  DROP [{v.index}]: {v.reason}")
-
-        except Exception as e:
-            logger.warning(f"BOM validation failed — using unvalidated BOM | error={e}")
-    
-
     
 
     if failed :
         update_job_status(job_id, "failed")
     else:
         update_job_status(job_id, "completed")
-        update_job_progress(job_id, "completed", "agent_4_merger")
-        # save the BOM in .json file   
+        update_job_progress(job_id, "completed", "agent_4_merger")  
         job_id = config["configurable"]["thread_id"]
         BASE_DIR = os.path.dirname(os.path.abspath(__file__))
         PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, "../../../"))
@@ -1357,11 +1359,30 @@ def node_agent_4_merger(state: ProjectState,config):
             [item.model_dump() for item in all_extracted_items],
             material_lookup
         )
+        referenced_detail_ids = set()
+        for item in all_extracted_items:
+            sym = (item.source_symbol or "").upper().strip()
+            if is_detail_ref(sym):
+                referenced_detail_ids.add(sym)
+
+        all_stored_details = graph_db.get_all_details_for_project(project_id)
+        unreferenced = []
+        for detail in all_stored_details:
+            detail_id = (detail.get("ID") or "").upper().strip()
+            if detail_id not in referenced_detail_ids:
+                unreferenced.append(detail)
+        
         file_path = os.path.join(base_path, f"{job_id}.json")
         data = {
             "job_id": job_id,
-            "bom": enriched
+            "bom": enriched,
+            "unreferenced_details": unreferenced 
         }
+        if not enriched:
+            data["message"] = (
+                "Floor plans were processed but no Bill of Materials items could be "
+                "extracted. Any section details detected are listed under the Untracked tab."
+            )
         try:
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
