@@ -212,7 +212,7 @@ def detect_and_read_symbols(image_path: str, output_dir: str,llm_flash) -> List[
             logger.error(
                 f"OCR failed | image={os.path.basename(image_path)} | index={i} | label={label} | bbox={crop_box} | error={str(e)}"
             )
-            raise
+            continue
 
     logger.info(
         f"Symbol detection completed | image={os.path.basename(image_path)} | count={len(detected_symbols)}"

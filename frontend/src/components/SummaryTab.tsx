@@ -80,7 +80,7 @@ export function SummaryTab({
                                 </div>
                             </div>
 
-                            <div>
+                            {/* <div>
                                 <div className="flex justify-between mb-2">
                                     <span className="text-sm">Fabrication ({fabricationMarkup}%)</span>
                                     <span className="text-sm">${fabricationCost.toFixed(2)}</span>
@@ -91,7 +91,7 @@ export function SummaryTab({
                                         style={{width: `${(fabricationCost / baseCost) * 100}%`}}
                                     />
                                 </div>
-                            </div>
+                            </div> */}
 
                             {galvanizingCost > 0 && (
                                 <div>

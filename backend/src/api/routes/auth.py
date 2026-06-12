@@ -19,7 +19,7 @@ security = HTTPBearer()
 
 JWT_SECRET = os.getenv("JWT_SECRET", "change-this-secret")
 JWT_EXPIRY_DAYS = 30
-ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")  # 
+ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")  
 
 def get_cipher():
     if not ENCRYPTION_KEY:
@@ -58,7 +58,7 @@ class LoginRequest(BaseModel):
 class ApiKeyRequest(BaseModel):
     gemini_api_key: str
 
-INVITE_CODE = os.getenv("DAX_INVITE_CODE", "dax-invite-2024")
+INVITE_CODE = os.getenv("DAX_INVITE_CODE")
 
 @router.post("/register")
 def register(request:RegisterRequest):
@@ -87,7 +87,7 @@ def login(request:LoginRequest):
     if not user:
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
-    if not user[4]:  # is_active
+    if not user[4]:  
         raise HTTPException(status_code=403, detail="Account disabled")
     
     if not bcrypt.checkpw(request.password.encode(), user[2].encode()):
@@ -103,7 +103,7 @@ def get_me(user_id: str = Depends(verify_token)):
     user = get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    has_api_key = bool(user[3])  # gemini_api_key
+    has_api_key = bool(user[3])  
     return {
         "user_id": user[0],
         "email": user[1],

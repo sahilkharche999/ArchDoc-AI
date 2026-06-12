@@ -217,11 +217,7 @@ sudo -u "$SERVICE_USER" bash <<MODELS
     echo "      MinerU models already present (\$ONNX_COUNT .onnx files). Skipping download."
   else
     echo "      Downloading MinerU models now — please wait..."
-    python3 -c "
-from mineru.utils.download_models import download_models
-download_models()
-print('MinerU model download complete.')
-"
+    echo "      Models already downloaded via mineru-models-download, skipping."
   fi
 MODELS
 

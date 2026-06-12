@@ -99,7 +99,7 @@ def delete_project_by_id(job_id: str):
         logger.debug("Project deleted successfully")
         return {"message": "deleted and cleanup started"}
     except HTTPException as e:
-        logger.error(f"Error fetching project | job_id={job_id} | error={str(h)}")
+        logger.error(f"Error fetching project | job_id={job_id} | error={str(e)}")
         raise
     except Exception as e:
         logger.exception(f"Error in deleting project | job_id={job_id} | error={str(e)}")

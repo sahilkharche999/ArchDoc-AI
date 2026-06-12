@@ -69,7 +69,7 @@ def map_page_layout(pdf_layout_path: str, json_path: str, images_dir: str,llm_fl
     try:
         layout_images = convert_from_path(pdf_layout_path)
         layout_image_b64 = image_to_base64(layout_images[0])
-    except:
+    except Exception as e:
         logger.error(f"[Layout] PDF to image conversion failed | path={pdf_layout_path} | error={str(e)}")
         return []
 
@@ -539,15 +539,6 @@ def _run_symbol_estimation(img_path, enriched_symbols,group_title="", group_deta
         logger.error(f"Symbol estimation failed: {e}")
         return None
 
-def _bom_item_to_material_dict(item):
-    """Convert BillOfMaterialItem to MaterialItem-compatible dict for graph storage."""
-    d = item.model_dump() if hasattr(item, 'model_dump') else dict(item)
-    # BillOfMaterialItem uses material_size, MaterialItem uses item_name
-    if "item_name" not in d:
-        d["item_name"] = d.get("material_size", "")
-    if "qty_rule" not in d:
-        d["qty_rule"] = f"FIXED: {d.get('quantity', 1)}"
-    return d
 
 def _extract_text_references_as_symbols(img_path: str, sheet_number: str,llm_flash) -> list:
 
@@ -635,6 +626,7 @@ def _extract_text_references_as_symbols(img_path: str, sheet_number: str,llm_fla
     
 def _process_dependent_details(items, detail_library,sheet_number, config, state):
     llm_pro, llm_25_pro, llm_flash = get_llms(state.get("gemini_api_key"))
+    graph_db._api_key = state.get("gemini_api_key")
     project_id = config["configurable"]["thread_id"]
     for plan in items:
         img_paths  = plan["image_path"] if isinstance(plan["image_path"], list) else [plan["image_path"]]
@@ -703,16 +695,18 @@ def _process_dependent_details(items, detail_library,sheet_number, config, state
                         merged_fabrication["bolt_count"] += sub_fab.get("bolt_count", 0)
                         merged_fabrication["hole_count"] += sub_fab.get("hole_count", 0)
                         merged_fabrication["weld_inches"] += sub_fab.get("weld_inches", 0.0)
-                        
-                graph_db.add_detail_bom(
-                    project_id=project_id,
-                    detail_key=plan['detail_id'] if "/" in plan['detail_id'] else f"{plan['detail_id']}/{plan_sheet}",
-                    title=plan.get("title", "PLAN_RESOLUTION"),
-                    materials_list=all_materials, 
-                    fabrication=merged_fabrication,
-                    page_num=plan["page"],
-                    sheet_number=plan_sheet
-                )
+                try:        
+                    graph_db.add_detail_bom(
+                        project_id=project_id,
+                        detail_key=plan['detail_id'] if "/" in plan['detail_id'] else f"{plan['detail_id']}/{plan_sheet}",
+                        title=plan.get("title", "PLAN_RESOLUTION"),
+                        materials_list=all_materials, 
+                        fabrication=merged_fabrication,
+                        page_num=plan["page"],
+                        sheet_number=plan_sheet
+                    )
+                except Exception as e:
+                    logger.error(f"add_detail_bom failed :error {e}")
 
 
 def _process_plan_like_details(items, detail_library, sheet_number,config, state):

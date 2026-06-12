@@ -499,15 +499,17 @@ function handleCanvasClick(e: React.MouseEvent<HTMLCanvasElement>) {
             }),
                 
             });
-            setShowHITL(false);
-            setHitlData(null);
-            setBboxes([]);
-            connectSSE(); 
+            
+            
         } finally {
             setIsSubmitting(false);
             setDeletedMineruIndices(new Set());
             setPlanRedBoxIndex(null);
             setPlanBoxIndices(new Set());
+            connectSSE(); 
+            setShowHITL(false);
+            setHitlData(null);
+            setBboxes([]);
         }
     }
  
@@ -539,7 +541,6 @@ function handleCanvasClick(e: React.MouseEvent<HTMLCanvasElement>) {
                                     <option value="floor">floor</option>
                                     <option value="section">section</option>
                                     <option value="text">text</option>
-                                    <option value="ignore">ignore</option>
                                 </select>
                             </div>
                         ))}

@@ -31,8 +31,7 @@ class ProjectState(TypedDict):
     page_map: Dict[int, str]
 
     detail_library: Dict[str, Any]
-    general_rules: str
-    final_bill_of_materials: Dict
+    final_bill_of_materials: Dict[str, Any]
 
     floor_plan_images: List[Dict[str, Any]]
     detected_details: List[Dict[str, Any]]

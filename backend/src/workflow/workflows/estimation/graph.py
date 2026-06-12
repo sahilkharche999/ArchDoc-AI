@@ -39,5 +39,3 @@ workflow.add_conditional_edges(
 
 workflow.add_edge("agent_4_merger", END)
 
-main_workflow = workflow.compile()
-
