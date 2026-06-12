@@ -55,7 +55,7 @@ export function Sidebar({onNewEstimation, selectedProjectId, onSelectProject}: S
                 const isFailed = data.status === "failed";
 
                 if (isFinalComplete || isFailed) {
-                    // ✅ update that project only
+                    //  update that project only
                     setProjects(prev =>
                         prev.map(p =>
                             p.job_id === project.job_id

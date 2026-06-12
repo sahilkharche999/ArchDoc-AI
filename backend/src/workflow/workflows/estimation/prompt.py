@@ -14,43 +14,6 @@ def prompt_for_node_classify_pages():
     """
     return prompt
 
-# ------ AGENT 1. PROCESS TEXT  ---------
-def prompt_node_process_text_rules(markdown_content: str):
-    return f"""
-You are a Structural Engineer reviewing construction specification notes for a steel fabrication estimator.
-
-### INPUT:
-{markdown_content}
-
-### YOUR GOAL
-Extract any information that would help a steel estimator understand:
-- What materials are required and to what standard
-- What dimensions, strengths, or grades apply
-- Any rules that affect how much material is needed or how it is fabricated
-
-### KEEP anything related to:
-- Steel members, grades, standards (structural steel, rebar, bolts, welds, anchor bolts)
-- Concrete specs that affect steel embedment or anchorage
-- Wood or other materials if they interact with steel connections
-- Load values, spans, or spacing rules that affect member sizing
-- Fabrication or erection requirements that affect quantity or labor
-- Any schedule or table reference that defines a material type
-
-### IGNORE:
-- Pure administrative notes (notify architect, submittals, permits)
-- Contractor liability statements
-- Testing and inspection procedures that don't define materials
-
-### OUTPUT:
-Return as TextRulesExtraction schema:
-- sections: list of objects with:
-    - section_name: string (e.g. "CONCRETE", "STRUCTURAL STEEL")
-    - rules: list of objects with:
-        - rule_number: integer
-        - text: string (the rule content)
-- general_notes: list of strings for project-wide notes
-
-"""
 # ------ AGENT 2. PROCESS PLAN ---------
 def prompt_for_node_process_plans():
    prompt = """
@@ -815,7 +778,7 @@ def prompt_for_extract_single_detail(group_title: str, group_detail_id: str):
       HSS:        HSS5X5X5/16
       Channel:    C8X11.5  or  MC6X15.1
       Flat bar:   FB1/4X3
-      Plate:      PL1/2
+      Plate:      PL3/8X8
       Pipe:       PIPE3SCH40   (diameter + schedule joined)
       Rod:        ROD3/4
       Seep ring:  SEEP RING 1/4"X3"

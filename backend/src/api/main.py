@@ -105,9 +105,9 @@ def health():
     redis_client = connect_redis(os.getenv('REDIS_HOST', 'localhost'), int(os.getenv('REDIS_PORT', 6379)))
     try:
         redis_client.ping()
-        checks["radis"]="ok"
+        checks["redis"]="ok"
     except Exception as e:
-        checks['radis']=f'faild with exception :{str(e)}'
+        checks['redis']=f'faild with exception :{str(e)}'
         overall="degraded"
 
     # Check Postgres

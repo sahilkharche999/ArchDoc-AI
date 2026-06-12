@@ -136,11 +136,9 @@ def node_process_text_rules(state: ProjectState,config):
             - pdf_path: Path to the source PDF
             - output_dir: Directory for temporary outputs
             - page_map: Dictionary mapping page numbers to page types (text, floor, section)
-            - general_rules: Accumulated notes from all processed pages
     
     Returns:
-        dict: Updated state with:
-            - general_rules: Concatenated notes from all text pages processed
+        dict: Updated state 
     """
     logger.info("--- NODE 1: Processing Text Rules ---")
     text_pages = [p for p, t in state["page_map"].items() if t == "text"]
@@ -148,7 +146,7 @@ def node_process_text_rules(state: ProjectState,config):
 
     if not text_pages:
         logger.info("No text pages found, skipping")
-        return {"general_rules": state.get("general_rules", "")}
+        return state
 
     for page_num in text_pages:
         logger.debug(f"[Page {page_num}] Start processing")
@@ -173,18 +171,9 @@ def node_process_text_rules(state: ProjectState,config):
             logger.warning(f"   ! MinerU failed on page {page_num} — skipping | error={e}")
             continue
 
-        md_file_path = f"{state['output_dir']}/notes_{page_num}/auto/notes_{page_num}.md"
         images_dir = f"{state['output_dir']}/notes_{page_num}/auto/images"
 
-        # 3. Read markdown and strip tables
-        try:
-            with open(md_file_path, "r", encoding="utf-8") as f:
-                markdown_content = f.read()
-        except FileNotFoundError:
-            logger.error(f"   ! Markdown file not found: {md_file_path}")
-            continue
-
-        # 4. Call 2..N — process each table image
+        # 3. Call 2..N — process each table image
         if os.path.exists(images_dir):
             image_files = [f for f in os.listdir(images_dir) if f.endswith(('.jpg', '.png'))]
             logger.debug(f"   > Found {len(image_files)} table images to process")
@@ -231,7 +220,7 @@ def node_process_text_rules(state: ProjectState,config):
                     logger.warning(f"   ! Table image extraction failed | image={img_file} | error={e}")
                     continue
 
-    return {"general_rules": state.get("general_rules", "")}
+    return state
 
 
 # ---  AGENT 2: PROCESS PLAN ---
@@ -257,16 +246,17 @@ def node_process_plans(state: ProjectState,config):
     Returns:
         dict: Updated state with:
             - floor_plan_images: List of paths to identified floor plan crops for later processing
-            - general_rules: Status message indicating graph updates
+           
     """
     logger.info("--- NODE: Agent 2 (Plan Ingestion) ---")
     llm_pro, llm_25_pro, llm_flash = get_llms(state.get("gemini_api_key"))
+    graph_db._api_key = state.get("gemini_api_key") 
     
 
     floor_plan_images = state.get("floor_plan_images", [])   
     detected_details = state.get("detected_details", [])     
     
-    if "remaining_pages" not in state:
+    if not state.get("remaining_pages"):
         state["remaining_pages"] = [
             p for p, t in state["page_map"].items() if t == "floor"
         ]
@@ -291,7 +281,7 @@ def node_process_plans(state: ProjectState,config):
     page_pdf_path = f"{page_dir}.pdf"
 
     mineru_output_dir = f"{state['output_dir']}/floor_{page_num}"
-    mineru_vlm_dir = f"{mineru_output_dir}/floor_{page_num}/auto" # Adjust based on actual MinerU output structure
+    mineru_vlm_dir = f"{mineru_output_dir}/floor_{page_num}/auto"           # Adjust based on actual MinerU output structure
     json_path = f"{mineru_vlm_dir}/floor_{page_num}_content_list_v2.json"
     images_dir = f"{mineru_vlm_dir}/images"
 
@@ -402,18 +392,18 @@ def node_process_plans(state: ProjectState,config):
     if resume_value is None:
             return state
     # corrected_bboxes = resume_value.get("corrected_bboxes", detected_bboxes) if resume_value else detected_bboxes
-    state["remaining_pages"].pop(0) 
+     
     corrected_bboxes = resume_value.get("corrected_bboxes", detected_bboxes)
     plan_box_indices = resume_value.get("plan_box_indices", None) 
     if isinstance(plan_box_indices, int):
         plan_box_indices = [plan_box_indices]
     plan_box_indices = set(plan_box_indices) if plan_box_indices else set()
-    deleted_mineru_bboxes = resume_value.get("deleted_mineru_bboxes", []) 
+    deleted_mineru_bboxes = resume_value.get("deleted_mineru_bboxes", []) if resume_value else []
     state["current_page"]["corrected_bboxes"] = corrected_bboxes
     state["current_page"]["status"] = "resumed"
 
     corrected_bboxes = state["current_page"]["corrected_bboxes"]
-    logger.info(f"▶️ RESUMED | corrected_bboxes count={len(corrected_bboxes)}")
+    logger.info(f" RESUMED | corrected_bboxes count={len(corrected_bboxes)}")
 
     logger.info(f"[HITL APPLY] page={page_num} | boxes={len(corrected_bboxes)}")
     if corrected_bboxes:
@@ -519,10 +509,11 @@ def node_process_plans(state: ProjectState,config):
     # 4. Run map_page_layout 
     
     title_map = {} 
+    image_files = []
     if os.path.exists(active_json_path) and os.path.exists(page_pdf_path):
         logger.debug("   > Running map_page_layout to associate titles with crops...")
         try:
-            layout_groups = map_page_layout(page_pdf_path, active_json_path, images_dir)
+            layout_groups = map_page_layout(page_pdf_path, active_json_path, images_dir,llm_flash=llm_flash)
             for group in layout_groups:
                     original = group.detail_id
                     group.detail_id = normalize_detail_key(group.detail_id,sheet_number=sheet_number)
@@ -569,7 +560,7 @@ def node_process_plans(state: ProjectState,config):
                     if group_title else []
                 ),
             ])
-            
+                       
             try:
                 result = llm_flash.with_structured_output(IngestionOutput).invoke([msg])
                 resolved_title = group_title or result.title or img_file
@@ -596,7 +587,7 @@ def node_process_plans(state: ProjectState,config):
                         if not primary_key or primary_key in ("•", "-", "*", "UNKNOWN"):
                             primary_key = str(idx + 1)
 
-                        graph_db._api_key = state.get("gemini_api_key")
+                        
                         graph_db.add_schedule_rule(
                             project_id=config["configurable"]["thread_id"],
                             schedule_name=resolved_title,
@@ -650,10 +641,10 @@ def node_process_plans(state: ProjectState,config):
                 break
 
     state["current_page"] = None
+    state["remaining_pages"].pop(0)
     return {
         "floor_plan_images": floor_plan_images, 
          "detected_details": detected_details,
-        "general_rules": "Updated Graph with Schedules",
         "remaining_pages": state.get("remaining_pages", []),
         "current_page": None            
     }
@@ -666,14 +657,14 @@ def node_process_details(state: ProjectState,config):
 
     Detailed steps:
     1. For each page identified as a "section" page, create a single-page PDF and
-       corresponding high‑resolution image.
+       corresponding high-resolution image.
     2. Run minerU in "pipeline" mode on the isolated PDF to perform semantic
        segmentation of title blocks, figures, tables, and other drawing elements.
     3. Provide minerU's JSON output along with the page image to a layout mapper
        that associates titles with their linked figure/table images.
     4. Iterate over the resulting detail groups, extracting structured information
        (e.g. part numbers, materials, dimensions) from each figure or crop.
-    5. Capture the sheet number from the drawing for reference and cross‑linking.
+    5. Capture the sheet number from the drawing for reference and cross-linking.
     6. Save each detail's data into a local `detail_library` and insert a record into
        Neo4j using `add_detail_bom`, embedding the information so it can be used in
        later semantic searches. Detail keys use engineering notation (e.g., "3/S-3.4").
@@ -688,6 +679,7 @@ def node_process_details(state: ProjectState,config):
     logger.info("--- NODE 3 : Processing Section Details (MinerU + HITL) ---")
     detail_library = state.get("detail_library", {})
     llm_pro, llm_25_pro, llm_flash = get_llms(state.get("gemini_api_key"))
+    graph_db._api_key = state.get("gemini_api_key")
     temp_plan_like_details = state.get("temp_plan_like_details", [])
     temp_dependent_detail_images = state.get("temp_dependent_details", [])
     sheet_number = ""
@@ -805,7 +797,7 @@ def node_process_details(state: ProjectState,config):
             resume_value = interrupt(review_data)
             state["remaining_section_pages"].pop(0) 
             corrected_bboxes = resume_value.get("corrected_bboxes", detected_bboxes) if resume_value else detected_bboxes
-            deleted_mineru_bboxes = resume_value.get("deleted_mineru_bboxes", []) 
+            deleted_mineru_bboxes = resume_value.get("deleted_mineru_bboxes", []) if resume_value else []
             state["current_section_page"]["corrected_bboxes"] = corrected_bboxes
             state["current_section_page"]["status"] = "resumed"
             logger.info(f" RESUMED | corrected_bboxes count={len(corrected_bboxes)}")
@@ -940,16 +932,18 @@ def node_process_details(state: ProjectState,config):
                                 "data":  detail_data.model_dump()
                             }
                             detail_dict = detail_data.model_dump()
-                            graph_db._api_key = state.get("gemini_api_key")
-                            graph_db.add_detail_bom(
-                                project_id=config["configurable"]["thread_id"],
-                                detail_key=key,
-                                title=detail_dict["title"],
-                                materials_list=detail_dict["materials"],
-                                fabrication=detail_dict["fabrication"],
-                                page_num=page_num,
-                                sheet_number=sheet_number
-                            )
+                            try:
+                                graph_db.add_detail_bom(
+                                    project_id=config["configurable"]["thread_id"],
+                                    detail_key=key,
+                                    title=detail_dict["title"],
+                                    materials_list=detail_dict["materials"],
+                                    fabrication=detail_dict["fabrication"],
+                                    page_num=page_num,
+                                    sheet_number=sheet_number
+                                )
+                            except Exception as e:
+                                logger.error(f"add_detail_bom failed error: {e}")
             
     remaining = state.get("remaining_section_pages", [])
     is_last_section_page = len(remaining) == 0
@@ -1014,16 +1008,19 @@ def node_process_details(state: ProjectState,config):
                         "data":  detail_data.model_dump()
                     }
                     detail_dict = detail_data.model_dump()
-                    graph_db._api_key = state.get("gemini_api_key")
-                    graph_db.add_detail_bom(
-                        project_id=config["configurable"]["thread_id"],
-                        detail_key=detail_key,
-                        title=detail_dict["title"],
-                        materials_list=detail_dict["materials"],
-                        fabrication=detail_dict["fabrication"],
-                        page_num=page_num,
-                        sheet_number=sheet_number
-                    )
+                    try:
+                        graph_db.add_detail_bom(
+                            project_id=config["configurable"]["thread_id"],
+                            detail_key=detail_key,
+                            title=detail_dict["title"],
+                            materials_list=detail_dict["materials"],
+                            fabrication=detail_dict["fabrication"],
+                            page_num=page_num,
+                            sheet_number=sheet_number
+                        )
+                    except Exception as e:
+                        logger.error(f"add_detail_bom failed error: {e}")
+                    
 
             else:
                 # PLAN_VIEW from Agent 2's detected_details — shouldn't happen but log it
@@ -1042,8 +1039,8 @@ def node_process_details(state: ProjectState,config):
     "detail_library": detail_library,
     "remaining_section_pages": state.get("remaining_section_pages", []), 
     "current_section_page": None,   
-    "temp_dependent_details": temp_dependent_detail_images,    # ← add
-    "temp_plan_like_details": temp_plan_like_details,          # ← add             
+    "temp_dependent_details": temp_dependent_detail_images,    
+    "temp_plan_like_details": temp_plan_like_details,                       
 }
 
 
@@ -1079,6 +1076,7 @@ def node_agent_4_merger(state: ProjectState,config):
     project_id = config["configurable"]["thread_id"]
     floor_images = state.get("floor_plan_images", [])
     llm_pro, llm_25_pro, llm_flash = get_llms(state.get("gemini_api_key"))
+    graph_db._api_key = state.get("gemini_api_key")
     
     # Load Excel Options
     excel_path = os.getenv("EXCEL_PATH", "Steel Estimator.xlsx")
@@ -1088,13 +1086,12 @@ def node_agent_4_merger(state: ProjectState,config):
 
     if not floor_images:
         logger.warning("No floor plans found — completing with empty BOM, collecting section details for Untracked")
-
         job_id = project_id
         BASE_DIR = os.path.dirname(os.path.abspath(__file__))
         PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, "../../../"))
         base_path = os.getenv("BOM_STORAGE_PATH", os.path.join(PROJECT_ROOT, "bom_storage"))
         os.makedirs(base_path, exist_ok=True)
-        graph_db._api_key = state.get("gemini_api_key")
+        
         all_stored_details = graph_db.get_all_details_for_project(project_id)
 
         file_path = os.path.join(base_path, f"{job_id}.json")
@@ -1118,7 +1115,6 @@ def node_agent_4_merger(state: ProjectState,config):
 
     all_extracted_items = []
     job_id = config["configurable"]["thread_id"]
-    failed=False
     for img in floor_images:
         img_path = img["path"]
         sheet_number = img["sheet"]
@@ -1319,8 +1315,8 @@ def node_agent_4_merger(state: ProjectState,config):
                   
         except Exception as e:
             logger.error(f"Agent 4 failed: {e}")
-            
-            failed=True
+            continue
+
     enriched = []
     valid_set = {m.upper().strip() for m in valid_materials}
 
@@ -1345,50 +1341,47 @@ def node_agent_4_merger(state: ProjectState,config):
     all_extracted_items = filtered
     
 
-    if failed :
-        update_job_status(job_id, "failed")
-    else:
-        update_job_status(job_id, "completed")
-        update_job_progress(job_id, "completed", "agent_4_merger")  
-        job_id = config["configurable"]["thread_id"]
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-        PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, "../../../"))
-        base_path = os.getenv("BOM_STORAGE_PATH",  os.path.join(PROJECT_ROOT, "bom_storage"))
-        os.makedirs(base_path, exist_ok=True)
-        enriched = enrich_bom_with_pricing(
-            [item.model_dump() for item in all_extracted_items],
-            material_lookup
-        )
-        referenced_detail_ids = set()
-        for item in all_extracted_items:
-            sym = (item.source_symbol or "").upper().strip()
-            if is_detail_ref(sym):
-                referenced_detail_ids.add(sym)
+    update_job_status(job_id, "completed")
+    update_job_progress(job_id, "completed", "agent_4_merger")  
+    job_id = config["configurable"]["thread_id"]
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, "../../../"))
+    base_path = os.getenv("BOM_STORAGE_PATH",  os.path.join(PROJECT_ROOT, "bom_storage"))
+    os.makedirs(base_path, exist_ok=True)
+    enriched = enrich_bom_with_pricing(
+        [item.model_dump() for item in all_extracted_items],
+        material_lookup
+    )
+    referenced_detail_ids = set()
+    for item in all_extracted_items:
+        sym = (item.source_symbol or "").upper().strip()
+        if is_detail_ref(sym):
+            referenced_detail_ids.add(sym)
 
-        all_stored_details = graph_db.get_all_details_for_project(project_id)
-        unreferenced = []
-        for detail in all_stored_details:
-            detail_id = (detail.get("ID") or "").upper().strip()
-            if detail_id not in referenced_detail_ids:
-                unreferenced.append(detail)
-        
-        file_path = os.path.join(base_path, f"{job_id}.json")
-        data = {
-            "job_id": job_id,
-            "bom": enriched,
-            "unreferenced_details": unreferenced 
-        }
-        if not enriched:
-            data["message"] = (
-                "Floor plans were processed but no Bill of Materials items could be "
-                "extracted. Any section details detected are listed under the Untracked tab."
-            )
-        try:
-            with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-            logger.info(f"BOM saved successfully at {file_path}")
-        except Exception as e:
-            logger.error(f"Failed to save BOM | job_id={job_id} | error={str(e)}")
+    all_stored_details = graph_db.get_all_details_for_project(project_id)
+    unreferenced = []
+    for detail in all_stored_details:
+        detail_id = (detail.get("ID") or "").upper().strip()
+        if detail_id not in referenced_detail_ids:
+            unreferenced.append(detail)
+    
+    file_path = os.path.join(base_path, f"{job_id}.json")
+    data = {
+        "job_id": job_id,
+        "bom": enriched,
+        "unreferenced_details": unreferenced 
+    }
+    if not enriched:
+        data["message"] = (
+            "Floor plans were processed but no Bill of Materials items could be "
+            "extracted. Any section details detected are listed under the Untracked tab."
+        )
+    try:
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        logger.info(f"BOM saved successfully at {file_path}")
+    except Exception as e:
+        logger.error(f"Failed to save BOM | job_id={job_id} | error={str(e)}")
 
 
     return {"final_bill_of_materials": {"final_bill_of_materials": enriched}}   

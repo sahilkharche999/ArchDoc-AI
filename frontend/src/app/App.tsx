@@ -68,7 +68,7 @@ export default function App() {
                 try {
                     await fetch(`${import.meta.env.VITE_API_URL}/api/v1/projects/${jobId}`, {
                     method: "PUT",
-                    headers: { "Content-Type": "application/json" },
+                    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
                     body: JSON.stringify({ new_name: newName }),
                     });
 

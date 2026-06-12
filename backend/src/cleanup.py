@@ -29,19 +29,33 @@ def wipe_memgraph(job_id: str = None):
 
 def wipe_files(job_id: str = None):
     """Delete output_temp, assets, and bom_storage for the job."""
-    base_dirs = [
-        os.getenv("OUTPUT_TEMP_DIR", "output_temp"),
-        os.getenv("ASSETS_DIR", "assets"),
-        os.getenv("BOM_STORAGE_PATH", "bom_storage"),
-    ]
-    for base in base_dirs:
-        if not os.path.exists(base):
-            continue
-        if job_id:
-            target = os.path.join(base, job_id)
-            if os.path.exists(target):
-                shutil.rmtree(target)
-                logger.info(f"Filesystem: removed {target}")
+    # output_temp — stored as a directory per job
+    output_temp = os.getenv("OUTPUT_TEMP_DIR", "output_temp")
+    if os.path.exists(output_temp) and job_id:
+        target = os.path.join(output_temp, job_id)
+        if os.path.exists(target):
+            shutil.rmtree(target)
+            logger.info(f"Filesystem: removed {target}")
+
+    # assets — stored as flat files: {job_id}_structural.pdf
+    assets_dir = os.getenv("ASSETS_DIR", "assets")
+    if os.path.exists(assets_dir) and job_id:
+        for fname in os.listdir(assets_dir):
+            if fname.startswith(job_id):
+                full = os.path.join(assets_dir, fname)
+                if os.path.isfile(full):
+                    os.remove(full)
+                else:
+                    shutil.rmtree(full)
+                logger.info(f"Filesystem: removed {full}")
+
+    # bom — stored as flat file: {job_id}.json
+    bom_dir = os.getenv("BOM_STORAGE_PATH", "bom_storage")
+    if os.path.exists(bom_dir) and job_id:
+        bom_file = os.path.join(bom_dir, f"{job_id}.json")
+        if os.path.exists(bom_file):
+            os.remove(bom_file)
+            logger.info(f"Filesystem: removed {bom_file}")
 
 
 def wipe_checkpoints(job_id: str = None):
@@ -84,7 +98,7 @@ def main():
     wipe_memgraph(target)
     wipe_checkpoints(target)
     wipe_files(target)
-    logger.info("✅ Cleanup complete")
+    logger.info(" Cleanup complete")
 
 
 if __name__ == "__main__":
